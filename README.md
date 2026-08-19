@@ -27,6 +27,23 @@ Para *assistir*, qualquer navegador serve.
 
 ## Ligar tudo (um comando)
 
+### No Windows
+
+Dê dois cliques em **`iniciar.bat`**. Ele:
+
+- usa o Node.js do computador quando houver uma versão compatível;
+- caso contrário, baixa uma cópia portátil e verificada para `.cache/`, sem
+  instalar nada no Windows;
+- roda `npm ci` sempre que abrir, para instalar ou conferir as dependências;
+- mostra um resumo seguro do `.env` e deixa usar a configuração atual, mesmo
+  vazia ou incompleta, ou abrir novamente o assistente de configuração;
+- permite iniciar normalmente ou com `npm run start:fast`.
+
+Tokens e secrets nunca aparecem no resumo. A pergunta sobre usar ou
+reconfigurar o `.env` aparece em toda execução.
+
+### Em outros sistemas, ou pelo terminal
+
 **1.** Baixe este projeto e descompacte numa pasta.
 
 **2.** Abra a pasta, clique na barra de endereço do explorador de arquivos,
@@ -170,7 +187,9 @@ Discord normalmente, só não feche a aba.
 
 **"npm não é reconhecido como um comando"**
 O Node.js não foi instalado, ou a janela preta foi aberta antes da instalação.
-Feche a janela, abra de novo e tente outra vez.
+No Windows, use `iniciar.bat`: ele prepara uma cópia portátil automaticamente.
+Nos outros sistemas, instale a versão LTS do Node.js, feche o terminal, abra de
+novo e tente outra vez.
 
 **Não sai som**
 Abra o botão ⓘ na barra de baixo e olhe a linha **Som**. Ela diz em qual dos
@@ -208,6 +227,7 @@ Aí nenhum túnel é necessário.
 
 | Comando | Para quê |
 |---|---|
+| `iniciar.bat` | No Windows: prepara tudo e abre um menu interativo. |
 | `npm install` | Baixa o que o programa precisa. Só na primeira vez. |
 | `npm run start:fast` | **Liga tudo.** Configura se faltar, e sobe numa janela só. |
 | `npm run tunel:criar` | Uma vez só: cria um endereço fixo, que não muda mais. |
