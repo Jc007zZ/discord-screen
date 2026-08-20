@@ -10,7 +10,7 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+import { createBroadcaster, fonteIndisponivel, opcoesTela, supportError } from './broadcaster.js';
 
 // ------------------------------------------------------------------- dublês
 
@@ -363,6 +363,19 @@ describe('fonteIndisponivel', () => {
   });
 });
 
+describe('opcoesTela', () => {
+  it('pede o cursor sempre visível como preferência, sem tornar isso obrigatório', () => {
+    expect(opcoesTela({ fps: 60 }).video).toEqual({
+      frameRate: { ideal: 60, max: 60 },
+      cursor: { ideal: 'always' },
+    });
+  });
+
+  it('não inventa constraints no vídeo descartável usado para escolher só o som', () => {
+    expect(opcoesTela({ video: true }).video).toBe(true);
+  });
+});
+
 describe('câmera', () => {
   const camera = () => new StreamFalsa(new FaixaFalsa('video', { width: 1280, height: 720 }));
 
@@ -433,6 +446,21 @@ describe('start', () => {
     expect(onStatus).toHaveBeenCalledWith(
       expect.objectContaining({ codec: 'avc1.42E01E', direct: true }),
     );
+  });
+
+  it('informa à interface o modo de cursor realmente aceito pelo navegador', async () => {
+    const onStatus = vi.fn();
+    await noAr(
+      { onStatus },
+      telaSimples({
+        width: 1920,
+        height: 1080,
+        displaySurface: 'monitor',
+        cursor: 'always',
+      }),
+    );
+
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'always' }));
   });
 
   it('reduz uma tela 4K até o teto de 1920x1080, sem cortar', async () => {

@@ -77,7 +77,13 @@ export function restricoesDeSom() {
  */
 export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
   const opts = {
-    video: video ?? { frameRate: { ideal: fps, max: fps } },
+    video: video ?? {
+      frameRate: { ideal: fps, max: fps },
+      // Preferência, não exigência: navegadores/superfícies que não oferecem
+      // composição do cursor continuam capturando em vez de falhar. Quando há
+      // suporte, o ponteiro fica visível mesmo parado.
+      cursor: { ideal: 'always' },
+    },
     audio: comSom ? restricoesDeSom() : false,
   };
   if (comSom) {
@@ -177,6 +183,9 @@ export function createBroadcaster({
   let frames = 0;
   let viewers = 0;
   let statsTimer = null;
+  // Valor que o navegador realmente aplicou; pode divergir da preferência ou
+  // nem ser informado, dependendo da superfície e do sistema operacional.
+  let cursorCapturado = null;
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
@@ -196,6 +205,7 @@ export function createBroadcaster({
     );
 
     const s = track.getSettings();
+    cursorCapturado = fonte === 'tela' ? (s.cursor ?? null) : null;
     const target = fitWithin(s.width ?? 1280, s.height ?? 720);
 
     config = await pickConfig(target.width, target.height);
@@ -226,6 +236,7 @@ export function createBroadcaster({
       width: config.width,
       height: config.height,
       direct: Boolean(window.MediaStreamTrackProcessor),
+      cursor: cursorCapturado,
     });
 
     statsTimer = setInterval(() => {
@@ -683,6 +694,7 @@ export function createBroadcaster({
         width: config.width,
         height: config.height,
         direct: Boolean(window.MediaStreamTrackProcessor),
+        cursor: cursorCapturado,
       });
     }
 
@@ -816,6 +828,7 @@ export function createBroadcaster({
 
     stream = fresh;
     const track = fresh.getVideoTracks()[0];
+    cursorCapturado = track.getSettings?.().cursor ?? null;
     track.contentHint = 'text';
     track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
