@@ -1,3 +1,5 @@
+import { identifyBottleneck } from './bottleneck.mjs';
+
 /**
  * Pipeline de transmissão: captura → codifica → envia.
  *
@@ -174,9 +176,11 @@ export function createBroadcaster({
   let srcH = 0;
   let startedAt = 0;
   let bytes = 0;
-  let frames = 0;
   let viewers = 0;
   let statsTimer = null;
+  let feedback = null;
+  let telemetry = { captured: 0, submitted: 0, encoded: 0, dropped: 0 };
+  let telemetryStartedAt = 0;
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
@@ -220,6 +224,7 @@ export function createBroadcaster({
     srcW = 0;
     srcH = 0;
     startedAt = Date.now();
+    telemetryStartedAt = performance.now();
 
     onStatus?.({
       codec: config.codec,
@@ -229,14 +234,28 @@ export function createBroadcaster({
     });
 
     statsTimer = setInterval(() => {
-      onStats?.({
+      const now = performance.now();
+      const dt = Math.max(0.001, (now - telemetryStartedAt) / 1000);
+      const sample = {
         viewers,
-        fps: frames,
+        fps: Math.round(telemetry.encoded / dt),
+        captureFps: Math.round(telemetry.captured / dt),
+        submittedFps: Math.round(telemetry.submitted / dt),
+        encodedFps: Math.round(telemetry.encoded / dt),
+        encoderQueueSize: encoder?.encodeQueueSize ?? 0,
+        droppedBeforeEncode: telemetry.dropped,
+        bufferedAmount: ws?.bufferedAmount ?? 0,
+        targetFps: fps,
+        targetBitrate: bitrate,
+        feedback,
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
-      });
+      };
+      sample.bottleneck = identifyBottleneck(sample, fps);
+      onStats?.(sample);
       bytes = 0;
-      frames = 0;
+      telemetry = { captured: 0, submitted: 0, encoded: 0, dropped: 0 };
+      telemetryStartedAt = now;
     }, 1000);
 
     pump(track);
@@ -625,8 +644,10 @@ export function createBroadcaster({
       frame.close();
       return false;
     }
+    telemetry.captured++;
     // Backpressure: fila no encoder vira latência que nunca mais sai.
     if (encoder.encodeQueueSize > 2) {
+      telemetry.dropped++;
       frame.close();
       return true;
     }
@@ -646,6 +667,7 @@ export function createBroadcaster({
 
     try {
       encoder.encode(out, { keyFrame: wantKeyframe });
+      telemetry.submitted++;
       if (wantKeyframe) {
         lastKeyframeAt = now;
         wantKeyframe = false;
@@ -655,7 +677,6 @@ export function createBroadcaster({
     }
 
     out.close();
-    frames++;
     return true;
   }
 
@@ -700,6 +721,7 @@ export function createBroadcaster({
 
   function onEncoded(chunk, metadata) {
     if (ws?.readyState !== WebSocket.OPEN) return;
+    telemetry.encoded++;
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
@@ -774,6 +796,7 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
+        else if (msg.type === 'viewer-health') feedback = msg.health ?? null;
         else if (msg.type === 'stop-request')
           stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
         else if (msg.type === 'error') {

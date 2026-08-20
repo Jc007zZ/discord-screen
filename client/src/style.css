@@ -916,6 +916,16 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.panel-sub {
+  margin: 6px 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .panel-btn {
   width: 100%;
   margin-top: 10px;
