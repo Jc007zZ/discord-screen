@@ -250,7 +250,7 @@ export function createBroadcaster({
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
       });
-      adaptive.tick({
+      adaptive.onTick({
         encoderQueueSize: encoder?.encodeQueueSize ?? 0,
         bufferedAmount: ws?.bufferedAmount ?? 0,
         encodedFps,
@@ -648,7 +648,7 @@ export function createBroadcaster({
     }
     // Backpressure: fila no encoder vira latência que nunca mais sai.
     if (encoder.encodeQueueSize > 2) {
-      adaptive.pressure('encoder');
+      adaptive.onPressure('encoder');
       frame.close();
       return true;
     }
@@ -722,7 +722,7 @@ export function createBroadcaster({
 
   function onEncoded(chunk, metadata) {
     if (ws?.readyState !== WebSocket.OPEN) return;
-    if (ws.bufferedAmount > 2 * 1024 * 1024) adaptive.pressure('rede');
+    if (ws.bufferedAmount > 2 * 1024 * 1024) adaptive.onPressure('rede');
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
