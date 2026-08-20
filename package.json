@@ -19,7 +19,8 @@
     "build": "npm -w client run build",
     "smoke": "node scripts/smoke.mjs",
     "smoke:controle": "node scripts/smoke-controle.mjs",
-    "smoke:admin": "node scripts/admin-smoke.mjs"
+    "smoke:admin": "node scripts/admin-smoke.mjs",
+    "test": "node shared/adaptive.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

@@ -1,3 +1,5 @@
+import { createAdaptiveController } from './adaptive.mjs';
+
 /**
  * Pipeline de transmissão: captura → codifica → envia.
  *
@@ -179,6 +181,18 @@ export function createBroadcaster({
   let frames = 0;
   let viewers = 0;
   let statsTimer = null;
+  const adaptive = createAdaptiveController({
+    initialBitrate: bitrate,
+    targetFps: fps,
+    onApply: (nextBitrate) => {
+      bitrate = nextBitrate;
+      if (encoder?.state !== 'configured' || !config) return;
+      config = { ...config, bitrate };
+      encoder.configure(config);
+      wantKeyframe = true;
+    },
+    onChange: (message) => onAviso?.(message),
+  });
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
@@ -232,11 +246,18 @@ export function createBroadcaster({
     });
 
     statsTimer = setInterval(() => {
+      const encodedFps = frames;
       onStats?.({
         viewers,
-        fps: frames,
+        fps: encodedFps,
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
+      });
+      adaptive.tick({
+        encoderQueueSize: encoder?.encodeQueueSize ?? 0,
+        bufferedAmount: ws?.bufferedAmount ?? 0,
+        encodedFps,
+        targetFps: fps,
       });
       bytes = 0;
       frames = 0;
@@ -617,6 +638,7 @@ export function createBroadcaster({
     }
     // Backpressure: fila no encoder vira latência que nunca mais sai.
     if (encoder.encodeQueueSize > 2) {
+      adaptive.pressure('encoder');
       frame.close();
       return true;
     }
@@ -690,6 +712,7 @@ export function createBroadcaster({
 
   function onEncoded(chunk, metadata) {
     if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws.bufferedAmount > 2 * 1024 * 1024) adaptive.pressure('rede');
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
@@ -840,6 +863,7 @@ export function createBroadcaster({
   function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
     if (nextBitrate) bitrate = nextBitrate;
     if (nextFps) fps = nextFps;
+    adaptive.reset(bitrate, fps);
     if (encoder?.state !== 'configured') return;
 
     config = { ...config, bitrate, framerate: fps };
