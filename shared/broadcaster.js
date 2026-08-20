@@ -176,7 +176,6 @@ export function createBroadcaster({
   let srcH = 0;
   let startedAt = 0;
   let bytes = 0;
-  let frames = 0;
   let viewers = 0;
   let statsTimer = null;
   let feedback = null;
@@ -255,7 +254,6 @@ export function createBroadcaster({
       sample.bottleneck = identifyBottleneck(sample, fps);
       onStats?.(sample);
       bytes = 0;
-      frames = 0;
       telemetry = { captured: 0, submitted: 0, encoded: 0, dropped: 0 };
       telemetryStartedAt = now;
     }, 1000);
@@ -679,7 +677,6 @@ export function createBroadcaster({
     }
 
     out.close();
-    frames++;
     return true;
   }
 
