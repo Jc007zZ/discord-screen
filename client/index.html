@@ -97,7 +97,7 @@
       </div>
 
       <!-- Barra de controles. Ocupa espaço no layout: não passa por cima da tela -->
-      <div class="bottombar">
+      <div id="bottombar" class="bottombar">
         <div id="panel" class="panel" hidden>
           <div class="panel-row"><span>Transmitindo</span><strong id="pWho">—</strong></div>
           <div class="panel-row"><span>Latência</span><strong id="pLag">—</strong></div>
@@ -106,6 +106,17 @@
           <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>
           <button id="probe" class="panel-btn">Testar captura no iframe</button>
         </div>
+
+        <button
+          id="controlsCollapse"
+          class="btn controls-collapse"
+          data-tip="Recolher controles"
+          aria-label="Recolher controles"
+          aria-expanded="true"
+          hidden
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        </button>
 
         <div class="dock">
           <div class="group">
