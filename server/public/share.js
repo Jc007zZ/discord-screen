@@ -18,7 +18,7 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=7';
+} from '/shared/broadcaster.js?v=8';
 
 const $ = (id) => document.getElementById(id);
 
@@ -39,12 +39,14 @@ const TITULO = document.title;
 const opcoes = {
   bitrate: Number(query.get('q')) || 2_500_000,
   fps: Number(query.get('fps')) || 30,
+  codec: ['auto', 'h264', 'vp8', 'vp9'].includes(query.get('codec')) ? query.get('codec') : 'auto',
 };
 
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  if (['auto', 'h264', 'vp8', 'vp9'].includes(novas.codec)) opcoes.codec = novas.codec;
 }
 
 const paineis = {};
@@ -373,6 +375,7 @@ function criarPainel(fonte) {
       wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}`,
       bitrate: opcoes.bitrate,
       fps: opcoes.fps,
+      codec: opcoes.codec,
       audio: !camera,
       fonte,
       // A prévia já pagou o gesto do usuário e a permissão: reaproveitá-la é o
