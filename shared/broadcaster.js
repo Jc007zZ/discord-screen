@@ -163,6 +163,9 @@ export function createBroadcaster({
   let somBloqueado = false;
   let video = null;
   let config = null;
+  // Configuração emitida pelo encoder para inicializar o decoder remoto. Ela
+  // precisa sobreviver ao primeiro envio para atender espectadores atrasados.
+  let decoderConfig = null;
   let stage = null;
   let stageCtx = null;
 
@@ -703,7 +706,8 @@ export function createBroadcaster({
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
-      ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
+      decoderConfig = serializeConfig(metadata.decoderConfig);
+      ws.send(JSON.stringify({ type: 'config', config: decoderConfig }));
     }
 
     const data = new Uint8Array(chunk.byteLength);
@@ -774,6 +778,11 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
+        // O servidor ainda não tinha a configuração quando o espectador pediu
+        // a live. Reenviar a última evita uma transmissão sem decoder.
+        else if (msg.type === 'need-config' && decoderConfig) {
+          ws.send(JSON.stringify({ type: 'config', config: decoderConfig }));
+        }
         else if (msg.type === 'stop-request')
           stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
         else if (msg.type === 'error') {

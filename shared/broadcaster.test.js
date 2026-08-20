@@ -630,6 +630,21 @@ describe('quadros', () => {
     expect(config.config.description).toBe('AQID');
   });
 
+  it('reenvia a última config quando um espectador chega antes de ela ser guardada', async () => {
+    const { ws, encoder } = await comQuadro(quadro());
+    encoder.output(chunkFalso(), {
+      decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 },
+    });
+    ws.enviados = [];
+
+    ws.receber({ type: 'need-config' });
+
+    expect(ws.mensagens()).toContainEqual({
+      type: 'config',
+      config: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 },
+    });
+  });
+
   it('não tenta enviar com o socket fechado', async () => {
     const { ws, encoder } = await comQuadro(quadro());
     ws.readyState = 3;
