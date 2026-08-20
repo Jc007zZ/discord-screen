@@ -382,6 +382,27 @@ describe('câmera', () => {
     expect(capturas[0].video.deviceId).toEqual({ exact: 'cam-1' });
   });
 
+  it('relaxa resolução e FPS quando o perfil preferido falha', async () => {
+    navigator.mediaDevices.getUserMedia.mockRejectedValueOnce(new Error('perfil recusado'));
+
+    await noAr({ fonte: 'camera', deviceId: 'cam-1' }, camera());
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(capturas).toEqual([{ video: { deviceId: { exact: 'cam-1' } }, audio: false }]);
+  });
+
+  it('explica quando nem o fallback consegue abrir uma câmera ocupada', async () => {
+    const ocupada = new Error('dispositivo em uso');
+    ocupada.name = 'NotReadableError';
+    navigator.mediaDevices.getUserMedia
+      .mockRejectedValueOnce(new Error('perfil recusado'))
+      .mockRejectedValueOnce(ocupada);
+
+    const b = createBroadcaster(opcoes({ fonte: 'camera' }));
+
+    await expect(b.start()).rejects.toThrow(/câmera está ocupada/);
+  });
+
   it('marca o conteúdo como vídeo natural, não como texto', async () => {
     const stream = camera();
     await noAr({ fonte: 'camera' }, stream);
