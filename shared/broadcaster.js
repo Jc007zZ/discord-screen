@@ -19,6 +19,15 @@ const CANDIDATES = [
   { codec: 'vp09.00.10.08' },
 ];
 
+const CODECS = new Set(['auto', 'h264', 'vp8', 'vp9']);
+
+export function codecCandidates(codec) {
+  if (codec === 'h264') return CANDIDATES.filter((c) => c.codec.startsWith('avc1'));
+  if (codec === 'vp8') return CANDIDATES.filter((c) => c.codec === 'vp8');
+  if (codec === 'vp9') return CANDIDATES.filter((c) => c.codec.startsWith('vp09'));
+  return CANDIDATES;
+}
+
 // Keyframe periódico: seguro barato para quem reconecta fora do fluxo normal.
 const KEYFRAME_EVERY_MS = 3000;
 
@@ -129,6 +138,7 @@ export function fonteIndisponivel(fonte) {
  * @param {string} opts.wsUrl        endpoint do relay, com o token de transmissor
  * @param {number} opts.bitrate      bits por segundo
  * @param {number} opts.fps
+ * @param {'auto'|'h264'|'vp8'|'vp9'} [opts.codec] codec a priorizar
  * @param {boolean} [opts.audio]     capturar também o som do computador
  * @param {'tela'|'camera'} [opts.fonte]  de onde vem o vídeo
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
@@ -140,6 +150,7 @@ export function createBroadcaster({
   wsUrl,
   bitrate,
   fps,
+  codec = 'auto',
   audio = false,
   fonte = 'tela',
   // Stream já aberto pela prévia. Reaproveitá-lo é o que evita abrir o seletor
@@ -163,6 +174,7 @@ export function createBroadcaster({
   let somBloqueado = false;
   let video = null;
   let config = null;
+  const codecPreferido = CODECS.has(codec) ? codec : 'auto';
   let stage = null;
   let stageCtx = null;
 
@@ -201,7 +213,11 @@ export function createBroadcaster({
     config = await pickConfig(target.width, target.height);
     if (!config) {
       cleanup();
-      throw new Error('Nenhum codec de vídeo suportado por este navegador.');
+      throw new Error(
+        codecPreferido === 'auto'
+          ? 'Nenhum codec de vídeo suportado por este navegador.'
+          : `O codec ${codecPreferido.toUpperCase()} não é suportado nesta configuração. Escolha Automático ou outro codec.`
+      );
     }
 
     await connect();
@@ -529,7 +545,7 @@ export function createBroadcaster({
     // Duas passadas: navegadores que não conhecem `latencyMode` podem recusar a
     // configuração inteira por causa dela. Mais latência é melhor que nada.
     for (const realtime of [true, false]) {
-      for (const candidate of CANDIDATES) {
+      for (const candidate of codecCandidates(codecPreferido)) {
         const cfg = { ...candidate, width, height, bitrate, framerate: fps };
         if (realtime) cfg.latencyMode = 'realtime';
         try {

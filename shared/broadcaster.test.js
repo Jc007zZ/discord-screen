@@ -10,7 +10,22 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+import { codecCandidates, createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+
+describe('seleção de codec', () => {
+  const codecs = (preferencia) => codecCandidates(preferencia).map((item) => item.codec);
+
+  it('respeita uma preferência explícita', () => {
+    expect(codecs('h264')).toEqual(['avc1.42E01E', 'avc1.42E01E']);
+    expect(codecs('vp8')).toEqual(['vp8']);
+    expect(codecs('vp9')).toEqual(['vp09.00.10.08']);
+  });
+
+  it('mantém a cadeia completa de fallback no modo automático', () => {
+    expect(codecs('auto')).toEqual(['avc1.42E01E', 'avc1.42E01E', 'vp8', 'vp09.00.10.08']);
+    expect(codecs('desconhecido')).toEqual(codecs('auto'));
+  });
+});
 
 // ------------------------------------------------------------------- dublês
 

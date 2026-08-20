@@ -240,6 +240,16 @@
             </select>
           </label>
 
+          <label class="field">
+            <span>Codec</span>
+            <select id="mCodec">
+              <option value="auto" selected>Automático — melhor disponível</option>
+              <option value="h264">H.264 — prioriza aceleração por hardware</option>
+              <option value="vp8">VP8 — máxima compatibilidade</option>
+              <option value="vp9">VP9 — melhor qualidade por bitrate</option>
+            </select>
+          </label>
+
           <button id="modalSwap" class="panel-btn" hidden>Trocar a tela compartilhada</button>
           <button id="modalSom" class="panel-btn" hidden>Som de uma aba ou janela</button>
 

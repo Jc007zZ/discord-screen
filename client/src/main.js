@@ -1670,11 +1670,17 @@ function abaAberta() {
  * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
  * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
  */
-const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30 };
+const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30, codec: 'auto' };
+const CODECS_DISPONIVEIS = new Set(['auto', 'h264', 'vp8', 'vp9']);
 
 let ajustes = (() => {
   try {
-    return { ...AJUSTES_PADRAO, ...JSON.parse(read('ajustes') ?? '{}') };
+    const salvos = JSON.parse(read('ajustes') ?? '{}');
+    return {
+      ...AJUSTES_PADRAO,
+      ...salvos,
+      codec: CODECS_DISPONIVEIS.has(salvos.codec) ? salvos.codec : 'auto',
+    };
   } catch {
     return { ...AJUSTES_PADRAO };
   }
@@ -1692,6 +1698,7 @@ function opcoesDaFonte() {
   return {
     q: String(ajustes.bitrate),
     fps: String(ajustes.fps),
+    codec: ajustes.codec,
   };
 }
 
@@ -1867,9 +1874,13 @@ function openModal(mode) {
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
+    $('mCodec').value = ajustes.codec;
+    $('mCodec').disabled = true;
   } else {
     $('mQuality').value = String(ajustes.bitrate);
     $('mFps').value = String(ajustes.fps);
+    $('mCodec').value = ajustes.codec;
+    $('mCodec').disabled = false;
   }
 
   $('modal').hidden = false;
@@ -1960,6 +1971,7 @@ async function broadcastFromHere() {
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
     bitrate: ajustes.bitrate,
     fps: ajustes.fps,
+    codec: ajustes.codec,
     audio: true,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
@@ -2008,6 +2020,7 @@ $('modalGo').addEventListener('click', () => {
   ajustes = {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
+    codec: $('mCodec').value,
   };
   store('ajustes', JSON.stringify(ajustes));
 
