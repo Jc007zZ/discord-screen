@@ -444,6 +444,20 @@ describe('watch e unwatch', () => {
     expect(ws.tipos()).toContain('need-keyframe');
   });
 
+  it('pede novamente a configuração quando ela ainda não foi guardada', () => {
+    const { room, viewer } = salaComEspectador();
+    const ws = socket();
+    const entry = R.attachBroadcaster(room, ws, pessoa('t1'));
+    R.startStream(room, entry);
+    viewer.limpar();
+    ws.limpar();
+
+    R.watch(room, viewer, entry.slot);
+
+    expect(viewer.tipos()).not.toContain('config');
+    expect(ws.tipos()).toEqual(expect.arrayContaining(['need-config', 'need-keyframe']));
+  });
+
   it('ignora o pedido repetido, para um cliente em laço não inundar a sala', () => {
     const { room, viewer, entry } = comTransmissao();
     R.watch(room, viewer, entry.slot);

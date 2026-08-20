@@ -765,6 +765,10 @@ export function watch(room, ws, slot) {
   ws.__primed.delete(slot);
 
   if (entry.config) sendJson(ws, { type: 'config', slot, config: entry.config });
+  // O espectador pode chegar entre o início da transmissão e o primeiro chunk,
+  // quando o servidor ainda não recebeu a configuração do decoder. Um
+  // keyframe, sozinho, não é suficiente para inicializar o VideoDecoder.
+  else sendJson(entry.ws, { type: 'need-config' });
   if (entry.audioConfig) {
     sendJson(ws, { type: 'audio-config', slot, config: entry.audioConfig });
   }
