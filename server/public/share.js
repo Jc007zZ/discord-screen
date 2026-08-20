@@ -18,7 +18,7 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=7';
+} from '/shared/broadcaster.js?v=8';
 
 const $ = (id) => document.getElementById(id);
 
@@ -290,6 +290,13 @@ function criarPainel(fonte) {
     alvo.className = `status ${kind}`;
   }
 
+  function rotuloCursor(cursor) {
+    if (cursor === 'always') return 'cursor sempre visível';
+    if (cursor === 'motion') return 'cursor visível ao mover';
+    if (cursor === 'never') return 'cursor não capturado';
+    return 'cursor não informado pelo navegador';
+  }
+
   function mostrarSetup() {
     el('preview').srcObject = null;
     el('live').hidden = true;
@@ -425,10 +432,12 @@ function criarPainel(fonte) {
       // compartilhamento.
       streamPronto: previa,
       deviceId: camera ? dispositivo : null,
-      onStatus: (s) =>
+      onStatus: (s) => {
+        const cursor = camera ? '' : ` · ${rotuloCursor(s.cursor)}`;
         setStatus(
-          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`,
-        ),
+          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}${cursor}`,
+        );
+      },
       onStats: (s) => {
         el('viewers').textContent = s.viewers;
         el('fps').textContent = `${s.fps} fps`;
