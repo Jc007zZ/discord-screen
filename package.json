@@ -17,6 +17,7 @@
     "start": "npm run build && npm -w server run start",
     "start:fast": "node scripts/start-fast.mjs",
     "build": "npm -w client run build",
+    "test": "node shared/bottleneck.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:controle": "node scripts/smoke-controle.mjs",
     "smoke:admin": "node scripts/admin-smoke.mjs"
