@@ -919,10 +919,28 @@ function closeAllStreams() {
 function ensureStatsTimer() {
   if (lagTimer) return;
   lagTimer = setInterval(() => {
-    const s = streams.get(activeSlot) ?? streams.values().next().value;
+    const selected = streams.has(activeSlot)
+      ? [activeSlot, streams.get(activeSlot)]
+      : streams.entries().next().value;
+    const [slot, s] = selected ?? [];
     if (!s) return;
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
-    $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
+    const telemetry = s.player.takeTelemetry(1);
+    $('pFps').textContent = `${telemetry.renderedFps} fps`;
+    const details = $('viewerDetails');
+    if (details) {
+      details.textContent =
+        `recebidos ${telemetry.receivedFps} fps · decodificados ${telemetry.decodedFps} fps · ` +
+        `fila ${telemetry.decodeQueueSize} · descartados ${telemetry.droppedFrames} · ` +
+        `latência estimada ${telemetry.estimatedLatencyMs} ms`;
+    }
+    if (ws?.readyState === WebSocket.OPEN && Number.isInteger(slot)) {
+      ws.send(JSON.stringify({
+        type: 'viewer-feedback',
+        slot,
+        telemetry,
+      }));
+    }
     $('pRes').textContent = s.player.getSizes().video;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".

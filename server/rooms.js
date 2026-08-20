@@ -604,6 +604,8 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
     startedAt: null,
     traffic: trafficCounter(),
     droppedChunks: 0,
+    viewerHealth: new Map(),
+    viewerHealthSentAt: 0,
   };
   room.broadcasters.set(chave, entry);
   room.slots.set(slot, entry);
@@ -620,6 +622,8 @@ export function startStream(room, entry) {
   entry.startedAt = Date.now();
   entry.config = null;
   entry.audioConfig = null;
+  entry.viewerHealth.clear();
+  entry.viewerHealthSentAt = 0;
   // Transmissão nova recomeça do zero: ninguém assiste até pedir.
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
@@ -777,6 +781,33 @@ export function unwatch(room, ws, slot) {
   if (!ws.__watching.delete(slot)) return;
   ws.__primed.delete(slot);
   broadcastState(room);
+}
+
+/** Agrega a condição dos espectadores e envia o pior caso ao transmissor. */
+export function viewerFeedback(room, ws, slot, telemetry) {
+  const entry = room.slots.get(slot);
+  if (!entry?.streaming || !ws.__watching?.has(slot) || !ws.__info?.id) return;
+
+  const now = Date.now();
+  entry.viewerHealth.set(ws.__info.id, { at: now, telemetry });
+  for (const [id, sample] of entry.viewerHealth) {
+    if (now - sample.at > 5_000) entry.viewerHealth.delete(id);
+  }
+
+  if (now - (entry.viewerHealthSentAt ?? 0) < 1_000) return;
+  entry.viewerHealthSentAt = now;
+  const samples = [...entry.viewerHealth.values()].map((sample) => sample.telemetry ?? {});
+  const rendered = samples.map((sample) => sample.renderedFps).filter(Number.isFinite);
+  const latency = samples.map((sample) => sample.estimatedLatencyMs).filter(Number.isFinite);
+  sendJson(entry.ws, {
+    type: 'viewer-health',
+    health: {
+      viewerCount: samples.length,
+      worstRenderedFps: rendered.length ? Math.min(...rendered) : 0,
+      worstLatency: latency.length ? Math.max(...latency) : 0,
+      congestedViewers: samples.filter((sample) => (sample.decodeQueueSize ?? 0) >= 3).length,
+    },
+  });
 }
 
 export function attachViewer(room, ws, info) {
