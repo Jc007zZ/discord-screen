@@ -33,6 +33,12 @@ body {
   overflow: hidden;
 }
 
+#app:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
 #app {
   position: relative;
   height: 100%;
@@ -107,12 +113,11 @@ body {
   max-height: 100%;
 }
 
-/* Tela cheia: só o palco. A barra de controles fica, senão não haveria saída
-   visível — sair por tecla é atalho, não é caminho. Ela deixa de ocupar faixa
-   e passa a flutuar por cima — ver `#app.cheia`, logo abaixo das barras. */
+/* Tela cheia: só o palco. A faixa inferior reserva a saída e os controles sem
+   cobrir o conteúdo transmitido. */
 .grid.palco.cheia {
   grid-template-columns: minmax(0, 1fr);
-  padding: 0;
+  padding: 0 16px 72px;
 }
 
 .grid.palco.cheia .tile {
@@ -217,6 +222,94 @@ body {
 .sidebar-people .avatar {
   width: 42%;
   font-size: 13px;
+}
+
+/* No palco, os controles ocupam a base da coluna direita sem serem movidos no
+   DOM. Assim seus eventos sobrevivem às reconstruções da grade. */
+#app.controles-na-lateral > .bottombar {
+  display: flex;
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  width: var(--strip, 300px);
+  padding: 10px 0 0;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+}
+
+#app.controles-na-lateral .grid.palco .sidebar {
+  padding-bottom: 190px;
+}
+
+#app.controles-na-lateral > .bottombar .dock {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+#app.controles-na-lateral > .bottombar .group {
+  display: contents;
+}
+
+#app.controles-na-lateral > .bottombar .btn {
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  justify-content: center;
+}
+
+#app.controles-na-lateral > .bottombar .panel {
+  width: 100%;
+}
+
+#app.controles-na-lateral > .bottombar .controls-collapse {
+  display: inline-flex;
+  align-self: flex-end;
+}
+
+#app.controles-recolhidos > .bottombar {
+  width: 38px;
+  padding: 0;
+  border-top: 0;
+}
+
+#app.controles-recolhidos > .bottombar .dock,
+#app.controles-recolhidos > .bottombar .panel {
+  display: none;
+}
+
+#app.controles-recolhidos > .bottombar .controls-collapse svg {
+  transform: rotate(180deg);
+}
+
+/* Em tela cheia a lateral deixa de existir e a mesma barra vira uma fileira
+   mínima no canto direito, fora da área reservada ao vídeo. */
+#app.controles-no-canto > .bottombar {
+  width: auto;
+  padding: 0;
+  border-top: 0;
+  align-items: flex-end;
+}
+
+#app.controles-no-canto > .bottombar .dock,
+#app.controles-no-canto > .bottombar .group {
+  display: flex;
+  gap: 5px;
+  padding: 0;
+  background: transparent;
+}
+
+#app.controles-no-canto > .bottombar .btn {
+  width: 38px;
+  min-width: 38px;
+}
+
+#app.controles-no-canto > .bottombar .panel {
+  position: absolute;
+  right: 0;
+  bottom: 46px;
+  width: 240px;
 }
 
 .divider {
@@ -676,35 +769,6 @@ button {
   align-items: center;
   gap: 10px;
   padding: 0 16px 16px;
-}
-
-/* Em tela cheia as barras saem do layout e flutuam sobre o vídeo: cada faixa
-   reservada é uma tira de tela a menos, e em tela cheia é a tela que se veio
-   ver. Paradas elas somem sozinhas, e qualquer movimento do cursor as traz de
-   volta — quem não mexe o mouse não está procurando botão nenhum. */
-#app.cheia .topbar,
-#app.cheia .bottombar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  transition: opacity 0.25s;
-}
-
-#app.cheia .topbar {
-  top: 0;
-}
-
-#app.cheia .bottombar {
-  bottom: 0;
-}
-
-/* pointer-events junto com a opacidade: uma barra invisível continua roubando
-   o clique que era para o vídeo. */
-#app.cheia.ocioso .topbar,
-#app.cheia.ocioso .bottombar {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no
@@ -1317,6 +1381,13 @@ button {
   .bottombar {
     padding: 0 8px 8px;
     gap: 6px;
+  }
+
+  #app.controles-na-lateral > .bottombar {
+    position: static;
+    width: auto;
+    padding: 0 8px 8px;
+    border-top: 0;
   }
 
   .dock {

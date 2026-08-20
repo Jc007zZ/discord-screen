@@ -77,6 +77,7 @@ let volumeAntes = volume || 1;
 // de quem assiste precisa sobreviver a isso.
 let activeSlot = null;
 let telaCheia = false;
+let controlesRecolhidos = read('controlesRecolhidos') === '1';
 
 // ------------------------------------------------------------------- helpers
 
@@ -240,7 +241,13 @@ function renderGrid() {
     grid.hidden = true;
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
-    $('app').classList.remove('cheia');
+    $('app').classList.remove(
+      'cheia',
+      'controles-na-lateral',
+      'controles-no-canto',
+      'controles-recolhidos',
+    );
+    $('controlsCollapse').hidden = true;
     return;
   }
 
@@ -261,9 +268,6 @@ function renderGrid() {
 
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
-  // A classe vai no #app, e não na grade: quem sai do layout são as barras, que
-  // são irmãs dela. Fica acima do `return` de sala vazia — senão as barras
-  // continuariam flutuando sobre o painel de "ninguém na sala".
   $('app').classList.toggle('cheia', noPalco && telaCheia);
   $('fullscreen').classList.toggle('on', telaCheia);
   // A dica e o nome acessível andam juntos: o botão faz duas coisas conforme o
@@ -272,7 +276,29 @@ function renderGrid() {
   $('fullscreen').dataset.tip = rotulo;
   $('fullscreen').setAttribute('aria-label', rotulo);
 
-  if (!hasPeople) return;
+  if (!hasPeople) {
+    $('app').classList.remove(
+      'controles-na-lateral',
+      'controles-no-canto',
+      'controles-recolhidos',
+    );
+    $('controlsCollapse').hidden = true;
+    return;
+  }
+
+  // A barra permanece no DOM principal e muda de posição apenas por CSS. Isso
+  // preserva os handlers durante cada reconstrução da grade.
+  $('app').classList.toggle('controles-na-lateral', noPalco);
+  $('app').classList.toggle('controles-no-canto', noPalco && telaCheia);
+  $('app').classList.toggle(
+    'controles-recolhidos',
+    noPalco && !telaCheia && controlesRecolhidos,
+  );
+  $('controlsCollapse').hidden = !noPalco || telaCheia;
+  $('controlsCollapse').setAttribute('aria-expanded', String(!controlesRecolhidos));
+  const textoRecolher = controlesRecolhidos ? 'Mostrar controles' : 'Recolher controles';
+  $('controlsCollapse').dataset.tip = textoRecolher;
+  $('controlsCollapse').setAttribute('aria-label', textoRecolher);
 
   grid.classList.toggle('palco', noPalco);
   grid.classList.toggle('cheia', noPalco && telaCheia);
@@ -324,7 +350,16 @@ function buildSidebar() {
   // miniaturas aqui, e a que está no palco é a única que não se repete.
   const outras = entradasDoGrid().filter((e) => e.slot !== null && e.slot !== activeSlot);
   if (outras.length) {
-    barra.append(secaoTitulo(outras.length === 1 ? 'Outra transmissão' : 'Outras transmissões'));
+    const fontes = new Set(outras.map((e) => available.get(e.slot)?.fonte ?? 'tela'));
+    const titulo =
+      fontes.size === 1 && fontes.has('camera')
+        ? outras.length === 1
+          ? 'Câmera'
+          : 'Câmeras'
+        : outras.length === 1
+          ? 'Outra transmissão'
+          : 'Outras transmissões';
+    barra.append(secaoTitulo(titulo));
     for (const e of outras) barra.append(buildTile(e.p, { slot: e.slot }).el);
   }
 
@@ -335,7 +370,9 @@ function buildSidebar() {
   // enquanto a miniatura ao lado mostrava a tela.
   const gente = document.createElement('div');
   gente.className = 'sidebar-people';
-  for (const p of participants) gente.append(buildTile(p, { semVideo: true }).el);
+  for (const p of participants.filter((p) => !p.broadcasting)) {
+    gente.append(buildTile(p, { semVideo: true }).el);
+  }
   barra.append(gente);
 
   return barra;
@@ -346,6 +383,12 @@ function secaoTitulo(texto) {
   t.className = 'sidebar-title';
   t.textContent = texto;
   return t;
+}
+
+/** Normaliza dados de sessão antes de eles chegarem aos componentes visuais. */
+function participanteSeguro(p) {
+  const nome = typeof p?.name === 'string' ? p.name.trim() : '';
+  return { ...p, name: nome || 'Participante' };
 }
 
 /**
@@ -406,8 +449,11 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   }
 
   const aoClicar = () => {
-    if (palco) telaCheia = !telaCheia;
-    else activeSlot = slot;
+    if (palco) {
+      alternarTelaCheia();
+      return;
+    }
+    activeSlot = slot;
     renderGrid();
   };
 
@@ -1539,7 +1585,7 @@ function connect() {
     const msg = JSON.parse(e.data);
 
     if (msg.type === 'state') {
-      participants = msg.participants ?? [];
+      participants = (msg.participants ?? []).map(participanteSeguro);
       abas.clear();
       for (const uid of msg.abas ?? []) abas.add(uid);
 
@@ -1555,7 +1601,7 @@ function connect() {
       const live = new Set((msg.streams ?? []).map((s) => s.slot));
       for (const s of msg.streams ?? []) {
         const info = available.get(s.slot) ?? { userId: s.userId, config: null };
-        info.watchers = s.watchers ?? [];
+        info.watchers = (s.watchers ?? []).map(participanteSeguro);
         // Servidor antigo não manda fonte; tela é o que sempre houve.
         info.fonte = s.fonte ?? 'tela';
         available.set(s.slot, info);
@@ -2105,35 +2151,41 @@ $('settings').addEventListener('click', () => {
   $('settings').classList.toggle('on', !panel.hidden);
 });
 
-/**
- * As barras somem depois de um tempo com o cursor parado, e voltam ao primeiro
- * movimento. Só têm efeito em tela cheia, onde elas flutuam sobre o vídeo — no
- * modo normal ocupam faixa própria e não há nada a desobstruir.
- *
- * O relógio corre sempre, mesmo fora da tela cheia: um `if` aqui pagaria uma
- * consulta ao estado a cada movimento do mouse para poupar um setTimeout, e
- * quem decide se a classe pinta alguma coisa já é o CSS.
- */
-const OCIO = 1500;
-let ocioso = null;
+async function alternarTelaCheia() {
+  if (activeSlot === null) return;
+  const entrando = !telaCheia;
+  telaCheia = entrando;
+  renderGrid();
 
-function acordarBarras() {
-  $('app').classList.remove('ocioso');
-  clearTimeout(ocioso);
-  ocioso = setTimeout(() => $('app').classList.add('ocioso'), OCIO);
+  // Fora do Discord, usa a Fullscreen API. Dentro da Activity, a política do
+  // iframe pode negar o pedido; o palco em foco continua funcionando.
+  if (entrando && !document.fullscreenElement) {
+    try {
+      await $('app').requestFullscreen?.();
+    } catch {
+      toast('O Discord manteve a Activity na janela; o modo de foco continua ativo.');
+    }
+  } else if (!entrando && document.fullscreenElement) {
+    try {
+      await document.exitFullscreen();
+    } catch {
+      // O estado visual já foi restaurado; não há outra ação útil aqui.
+    }
+  }
 }
 
-// pointerdown junto com o movimento: em tela sensível ao toque não há mousemove
-// nenhum, e sem isto as barras sumiriam para sempre no primeiro silêncio.
-window.addEventListener('mousemove', acordarBarras);
-window.addEventListener('pointerdown', acordarBarras);
-acordarBarras();
+$('fullscreen').addEventListener('click', alternarTelaCheia);
 
-// O estado visual do botão é decidido por renderGrid, que é quem sabe se há
-// tela no palco — aqui só se troca a intenção.
-$('fullscreen').addEventListener('click', () => {
-  if (activeSlot === null) return;
-  telaCheia = !telaCheia;
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && telaCheia) {
+    telaCheia = false;
+    renderGrid();
+  }
+});
+
+$('controlsCollapse').addEventListener('click', () => {
+  controlesRecolhidos = !controlesRecolhidos;
+  store('controlesRecolhidos', controlesRecolhidos ? '1' : '0');
   renderGrid();
 });
 
@@ -2150,8 +2202,7 @@ window.addEventListener('keydown', (e) => {
 
   // Esc sai da tela cheia — é o reflexo de todo mundo.
   if (telaCheia) {
-    telaCheia = false;
-    renderGrid();
+    alternarTelaCheia();
   }
 });
 
