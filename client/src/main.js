@@ -1670,7 +1670,7 @@ function abaAberta() {
  * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
  * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
  */
-const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30 };
+const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30, mode: 'auto' };
 
 let ajustes = (() => {
   try {
@@ -1692,6 +1692,7 @@ function opcoesDaFonte() {
   return {
     q: String(ajustes.bitrate),
     fps: String(ajustes.fps),
+    modo: ajustes.mode,
   };
 }
 
@@ -1867,9 +1868,11 @@ function openModal(mode) {
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
+    $('mMode').value = s.mode ?? ajustes.mode;
   } else {
     $('mQuality').value = String(ajustes.bitrate);
     $('mFps').value = String(ajustes.fps);
+    $('mMode').value = ajustes.mode;
   }
 
   $('modal').hidden = false;
@@ -1961,6 +1964,7 @@ async function broadcastFromHere() {
     bitrate: ajustes.bitrate,
     fps: ajustes.fps,
     audio: true,
+    mode: ajustes.mode,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
       myBroadcast = null;
@@ -1997,9 +2001,9 @@ $('modalGo').addEventListener('click', () => {
   if (modalMode === 'live') {
     const bitrate = Number($('mQuality').value);
     const fps = Number($('mFps').value);
-    myBroadcast?.setQuality({ bitrate, fps });
+    myBroadcast?.setQuality({ bitrate, fps, mode: $('mMode').value });
     // Ajustar no ar também é escolher: o que valeu agora vale na próxima.
-    ajustes = { ...ajustes, bitrate, fps };
+    ajustes = { ...ajustes, bitrate, fps, mode: $('mMode').value };
     store('ajustes', JSON.stringify(ajustes));
     closeModal();
     return;
@@ -2008,6 +2012,7 @@ $('modalGo').addEventListener('click', () => {
   ajustes = {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
+    mode: $('mMode').value,
   };
   store('ajustes', JSON.stringify(ajustes));
 

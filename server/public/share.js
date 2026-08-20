@@ -39,12 +39,14 @@ const TITULO = document.title;
 const opcoes = {
   bitrate: Number(query.get('q')) || 2_500_000,
   fps: Number(query.get('fps')) || 30,
+  mode: ['auto', 'motion', 'text'].includes(query.get('modo')) ? query.get('modo') : 'auto',
 };
 
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  if (['auto', 'motion', 'text'].includes(novas.modo)) opcoes.mode = novas.modo;
 }
 
 const paineis = {};
@@ -375,6 +377,7 @@ function criarPainel(fonte) {
       fps: opcoes.fps,
       audio: !camera,
       fonte,
+      mode: opcoes.mode,
       // A prévia já pagou o gesto do usuário e a permissão: reaproveitá-la é o
       // que evita o seletor de tela abrir uma segunda vez para o mesmo
       // compartilhamento.
@@ -464,7 +467,8 @@ function criarPainel(fonte) {
     verCamera,
     setStatus,
     indisponivel: () => Boolean(indisponivel),
-    aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
+    aplicarQualidade: () =>
+      broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps, mode: opcoes.mode }),
     ativo: () => Boolean(broadcaster),
     // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
     parar: () => {
