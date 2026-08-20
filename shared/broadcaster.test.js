@@ -413,6 +413,31 @@ describe('câmera', () => {
   });
 });
 
+describe('modo do conteúdo da tela', () => {
+  it.each([
+    ['motion', 'motion'],
+    ['text', 'text'],
+  ])('aplica %s como contentHint %s', async (mode, expected) => {
+    const stream = telaSimples();
+    await noAr({ mode }, stream);
+    expect(stream.getVideoTracks()[0].contentHint).toBe(expected);
+  });
+
+  it('deixa o navegador decidir no modo automático', async () => {
+    const stream = telaSimples();
+    await noAr({ mode: 'auto' }, stream);
+    expect(stream.getVideoTracks()[0].contentHint).toBeUndefined();
+  });
+
+  it('troca o contentHint sem reiniciar a transmissão', async () => {
+    const stream = telaSimples();
+    const { b } = await noAr({ mode: 'text' }, stream);
+    b.setQuality({ mode: 'motion' });
+    expect(stream.getVideoTracks()[0].contentHint).toBe('motion');
+    expect(b.getSettings().mode).toBe('motion');
+  });
+});
+
 describe('start', () => {
   it('escolhe o primeiro codec aceito e configura o encoder com ele', async () => {
     const { encoder } = await noAr();
@@ -892,7 +917,7 @@ describe('setQuality', () => {
 
     expect(encoder.configuracoes.at(-1)).toMatchObject({ bitrate: 5_000_000, framerate: 60 });
     expect(stream.getVideoTracks()[0].constraints).toEqual({ frameRate: { ideal: 60, max: 60 } });
-    expect(b.getSettings()).toEqual({ bitrate: 5_000_000, fps: 60 });
+    expect(b.getSettings()).toEqual({ bitrate: 5_000_000, fps: 60, mode: 'auto' });
   });
 
   it('não faz nada com o encoder fora do ar', async () => {
@@ -909,7 +934,7 @@ describe('setQuality', () => {
 
     b.setQuality({});
 
-    expect(b.getSettings()).toEqual({ bitrate: 2_500_000, fps: 30 });
+    expect(b.getSettings()).toEqual({ bitrate: 2_500_000, fps: 30, mode: 'auto' });
   });
 });
 

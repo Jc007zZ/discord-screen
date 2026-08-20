@@ -1,3 +1,5 @@
+import { contentHintFor } from './broadcast-mode.mjs';
+
 /**
  * Pipeline de transmissão: captura → codifica → envia.
  *
@@ -131,6 +133,7 @@ export function fonteIndisponivel(fonte) {
  * @param {number} opts.fps
  * @param {boolean} [opts.audio]     capturar também o som do computador
  * @param {'tela'|'camera'} [opts.fonte]  de onde vem o vídeo
+ * @param {'auto'|'motion'|'text'} [opts.mode] tipo de conteúdo da tela
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
@@ -142,6 +145,8 @@ export function createBroadcaster({
   fps,
   audio = false,
   fonte = 'tela',
+  mode = 'auto',
+  contentHint = null,
   // Stream já aberto pela prévia. Reaproveitá-lo é o que evita abrir o seletor
   // de tela duas vezes — e, na câmera, segurar o dispositivo em duas capturas.
   streamPronto = null,
@@ -184,9 +189,10 @@ export function createBroadcaster({
     stream = streamPronto ?? (fonte === 'camera' ? await capturarCamera() : await capturarTela());
 
     const track = stream.getVideoTracks()[0];
-    // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
-    // vídeo natural, e aí suavizar é justamente o certo.
-    track.contentHint = fonte === 'camera' ? 'motion' : 'text';
+    // A câmera é sempre vídeo natural. Para tela, a pessoa decide se prefere
+    // fluidez, nitidez ou se deixa o navegador escolher automaticamente.
+    const hint = fonte === 'camera' ? 'motion' : contentHint || contentHintFor(mode);
+    if (hint) track.contentHint = hint;
     track.addEventListener('ended', () =>
       stop(
         fonte === 'camera'
@@ -816,7 +822,8 @@ export function createBroadcaster({
 
     stream = fresh;
     const track = fresh.getVideoTracks()[0];
-    track.contentHint = 'text';
+    const hint = contentHint || contentHintFor(mode);
+    if (hint) track.contentHint = hint;
     track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
     // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
@@ -848,9 +855,14 @@ export function createBroadcaster({
   }
 
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */
-  function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
+  function setQuality({ bitrate: nextBitrate, fps: nextFps, mode: nextMode } = {}) {
     if (nextBitrate) bitrate = nextBitrate;
     if (nextFps) fps = nextFps;
+    if (['auto', 'motion', 'text'].includes(nextMode)) {
+      mode = nextMode;
+      const track = stream?.getVideoTracks()[0];
+      if (track && fonte !== 'camera') track.contentHint = contentHintFor(mode) ?? '';
+    }
     if (encoder?.state !== 'configured') return;
 
     config = { ...config, bitrate, framerate: fps };
@@ -865,7 +877,7 @@ export function createBroadcaster({
       .catch(() => {});
   }
 
-  const getSettings = () => ({ bitrate, fps });
+  const getSettings = () => ({ bitrate, fps, mode });
 
   function cleanup() {
     stream?.getTracks().forEach((t) => t.stop());
