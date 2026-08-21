@@ -1,4 +1,4 @@
-import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc.js';
+import { iceServers, criarPeer, suportaWebRTC, MORTO } from './rtc.js';
 
 /**
  * Pipeline de transmissão: captura → codifica → envia.
@@ -11,11 +11,13 @@ import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc
  * codifica quadro a quadro e envia direto pelo relay.
  *
  * Por cima disso, cada espectador ganha uma tentativa de conexão direta por
- * WebRTC (veja rtc.js). Quando ela fecha, o vídeo daquele espectador para de
- * passar pelo relay e passa a sair daqui num transporte que sabe descartar
- * quadro atrasado em vez de enfileirar. Quando não fecha, nada muda — o
- * caminho abaixo continua sendo o mesmo de sempre, e é ele que garante que
- * ninguém fica sem imagem por causa de um NAT.
+ * WebRTC (veja rtc.js): um RTCDataChannel não-confiável que carrega os mesmos
+ * pacotes binários do relay — nada de faixa de mídia, fila de jitter ou segunda
+ * codificação. Quando ela fecha, o vídeo daquele espectador para de passar pelo
+ * relay e passa a sair daqui num transporte que sabe descartar quadro atrasado
+ * em vez de enfileirar. Quando não fecha, nada muda — o caminho abaixo continua
+ * sendo o mesmo de sempre, e é ele que garante que ninguém fica sem imagem por
+ * causa de um NAT.
  */
 
 /**
@@ -118,6 +120,21 @@ const KEYFRAME_EVERY_MS = 3000;
 const TIPO_KEYFRAME = 1;
 const TIPO_DELTA = 2;
 const TIPO_AUDIO = 3;
+
+/**
+ * O canal de dados carrega os mesmos pacotes binários do relay — é a única
+ * coisa que ele faz. Fora de ordem e sem retransmissão de propósito: quadro
+ * atrasado não vale a espera que um transporte confiável impõe para entregá-lo,
+ * e quem perde o fio recupera a imagem no keyframe periódico.
+ */
+const CANAL_OPTS = { ordered: false, maxRetransmits: 0 };
+
+/**
+ * Backpressure do canal: entupido não enfileira mais. Descartar quadro é o
+ * contrato deste transporte; enfileirar seria reconstruir, dentro do SCTP, o
+ * comportamento de TCP que se quer evitar.
+ */
+const MAX_CANAL_BYTES = 1024 * 1024;
 
 // 96 kbps em Opus estéreo é transparente para som de aplicativo e de vídeo, e é
 // ruído perto dos megabits do vídeo — não vale economizar aqui.
@@ -261,9 +278,11 @@ export function createBroadcaster({
 
   // Uma conexão direta por espectador. O servidor nomeia cada um; aqui o nome
   // é só a chave — quem é a pessoa não interessa para negociar transporte.
-  const peers = new Map(); // peerId -> RTCPeerConnection
-  // Quadros ainda precisam subir pelo relay? Falso só quando todo mundo que
-  // assiste está na conexão direta, e o servidor é quem sabe disso.
+  const peers = new Map(); // peerId -> { pc, canal }
+  // Quadros ainda precisam subir pelo relay? Falso quando todo mundo que
+  // assiste está na conexão direta, e o servidor é quem sabe disso. Codificar
+  // continua: os canais diretos bebem da mesma saída do encoder — o que este
+  // sinal desliga é só a subida, não a produção.
   let enviarChunks = true;
   // Antes do primeiro config, pausar deixaria quem chegasse depois sem como
   // montar o decodificador: o servidor guarda o config, mas só depois de vê-lo.
@@ -634,12 +653,12 @@ export function createBroadcaster({
   }
 
   function onAudioEncoded(chunk) {
-    if (ws?.readyState !== WebSocket.OPEN) return;
-
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
-    ws.send(empacotar(TIPO_AUDIO, chunk.timestamp ?? 0, data));
-    bytes += 18 + data.byteLength;
+    const buf = empacotar(TIPO_AUDIO, chunk.timestamp ?? 0, data);
+    bytes += buf.byteLength;
+    if (enviarChunks && ws?.readyState === WebSocket.OPEN) ws.send(buf);
+    enviarPorCanais(buf);
   }
 
   async function pickConfig(width, height) {
@@ -761,11 +780,11 @@ export function createBroadcaster({
       return false;
     }
 
-    // Todo mundo que assiste está na conexão direta: este quadro não tem para
-    // onde ir. Codificá-lo assim mesmo gastaria CPU e, pior, subida — que é o
-    // recurso que as conexões diretas acabaram de passar a disputar. Volta
-    // sozinho no instante em que alguém precisar do relay de novo.
-    if (!enviarChunks && configEnviada) {
+    // Ninguém consumindo em lugar nenhum — nem relay, nem canal direto aberto:
+    // este quadro não tem para onde ir. Codificá-lo assim mesmo gastaria CPU
+    // e, pior, subida — que é o recurso que as conexões diretas disputam. Volta
+    // sozinho no instante que alguém precisar de qualquer um dos caminhos.
+    if (!enviarChunks && configEnviada && !temCanalAberto()) {
       frame.close();
       return true;
     }
@@ -908,12 +927,14 @@ export function createBroadcaster({
   }
 
   function onEncoded(chunk, metadata) {
-    if (ws?.readyState !== WebSocket.OPEN) return;
-
-    // O decoderConfig chega no primeiro chunk e sempre que a config muda.
+    // O decoderConfig chega no primeiro chunk e sempre que a config muda — e
+    // só pelo relay: quem assiste monta o decoder com a config que veio pelo
+    // WebSocket ao pedir a tela, antes de o canal direto existir.
     if (metadata?.decoderConfig) {
-      ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
       configEnviada = true;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
+      }
     }
 
     const data = new Uint8Array(chunk.byteLength);
@@ -924,8 +945,34 @@ export function createBroadcaster({
       chunk.timestamp ?? 0,
       data,
     );
-    ws.send(buf);
     bytes += buf.byteLength;
+    // O relay é um dos destinos, não o único. Subir para ele é opcional — o
+    // servidor avisa quando ninguém mais precisa; o espelho para os canais é o
+    // que alimenta quem está neles.
+    if (enviarChunks && ws?.readyState === WebSocket.OPEN) ws.send(buf);
+    enviarPorCanais(buf);
+  }
+
+  /**
+   * Espelha um pacote já empacotado para todos os canais diretos abertos.
+   *
+   * O mesmo buffer do relay, sem transformação nenhuma: quem recebe monta o
+   * decoder exatamente como receberia pelo WebSocket.
+   */
+  function enviarPorCanais(buf) {
+    for (const { canal } of peers.values()) {
+      if (canal.readyState !== 'open') continue;
+      if (canal.bufferedAmount > MAX_CANAL_BYTES) continue;
+      canal.send(buf);
+    }
+  }
+
+  /** Existe algum espectador consumindo os quadros por canal direto agora? */
+  function temCanalAberto() {
+    for (const { canal } of peers.values()) {
+      if (canal.readyState === 'open') return true;
+    }
+    return false;
   }
 
   /**
@@ -1027,17 +1074,17 @@ export function createBroadcaster({
   /**
    * Abre a conexão direta com um espectador e manda a oferta.
    *
-   * Quem oferece é sempre este lado, porque é este lado que tem a mídia: uma
-   * oferta feita por quem só recebe teria que descrever faixas que ela não tem,
-   * e obrigaria a uma segunda negociação assim que as faixas chegassem.
+   * O canal de dados nasce antes da oferta: é ele que cria a seção de
+   * aplicação no SDP, e uma negociação única basta. Este lado oferece porque é
+   * ele quem cria o canal — a direção dos dados não decide quem oferece.
    */
   async function abrirPeer(peerId) {
-    if (!peerId || !suportaWebRTC() || !stream || peers.has(peerId)) return;
+    if (!peerId || !suportaWebRTC() || peers.has(peerId)) return;
 
     try {
       const ice = await iceServers(apiBase);
       // O await acima é longo o bastante para a transmissão ter acabado.
-      if (!running || !stream || peers.has(peerId)) return;
+      if (!running || peers.has(peerId)) return;
 
       const pc = criarPeer({
         ice,
@@ -1046,17 +1093,14 @@ export function createBroadcaster({
           if (MORTO.has(estado)) fecharPeer(peerId);
         },
       });
-      peers.set(peerId, pc);
 
-      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      const canal = pc.createDataChannel('quadros', CANAL_OPTS);
+      canal.binaryType = 'arraybuffer';
+      peers.set(peerId, { pc, canal });
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       enviarRtc(peerId, { kind: 'offer', sdp: pc.localDescription });
-
-      // Depois do setLocalDescription: antes dele os encodings ainda não
-      // existem, e o ajuste se perderia sem erro nenhum.
-      await ajustarEnvio(pc, { bitrate, fonte, fps });
     } catch (err) {
       console.warn('[rtc] oferta falhou:', err.message);
       fecharPeer(peerId);
@@ -1064,14 +1108,18 @@ export function createBroadcaster({
   }
 
   async function receberRtc(peerId, payload) {
-    const pc = peers.get(peerId);
-    if (!pc || !payload) return;
+    const peer = peers.get(peerId);
+    if (!peer || !payload) return;
 
     try {
       if (payload.kind === 'answer' && payload.sdp) {
-        await pc.setRemoteDescription(payload.sdp);
+        await peer.pc.setRemoteDescription(payload.sdp);
       } else if (payload.kind === 'ice' && payload.candidate) {
-        await pc.addIceCandidate(payload.candidate);
+        await peer.pc.addIceCandidate(payload.candidate);
+      } else if (payload.kind === 'need-keyframe') {
+        // O decoder do espectador está frio ou quebrou: o próximo quadro sai
+        // completo, e chega por qualquer um dos caminhos que ele estiver usando.
+        wantKeyframe = true;
       }
     } catch (err) {
       // Candidato que chega antes da descrição remota é normal e recuperável;
@@ -1081,13 +1129,14 @@ export function createBroadcaster({
   }
 
   function fecharPeer(peerId) {
-    const pc = peers.get(peerId);
-    if (!pc) return;
+    const peer = peers.get(peerId);
+    if (!peer) return;
     peers.delete(peerId);
     try {
-      pc.close();
+      peer.pc.close();
     } catch {
-      // Fechar o que já se fechou lança e não há nada a desfazer.
+      // Fechar o que já se fechou lança e não há nada a desfazer. Fechar o pc
+      // fecha os canais dele junto — não há mais nada a encerrar aqui.
     }
   }
 
@@ -1097,31 +1146,12 @@ export function createBroadcaster({
   }
 
   /**
-   * Troca a faixa de vídeo das conexões diretas sem renegociar.
-   *
-   * replaceTrack não mexe no SDP: quem assiste continua na mesma conexão e só
-   * vê a imagem mudar. Renegociar aqui custaria um ICE novo por espectador —
-   * segundos de tela parada em troca de nada.
-   */
-  async function trocarNosPeers(novo) {
-    for (const pc of peers.values()) {
-      for (const sender of pc.getSenders()) {
-        if (sender.track?.kind !== novo.kind) continue;
-        try {
-          await sender.replaceTrack(novo);
-        } catch {
-          // Navegador que não troca a faixa segue com a antiga, que morreu com
-          // o stream: aquele espectador cai para o relay pelo caminho normal.
-        }
-      }
-    }
-  }
-
-  /**
    * Troca a tela compartilhada sem derrubar a transmissão.
    *
    * A conexão, o encoder e o slot continuam os mesmos — quem assiste só vê a
-   * imagem mudar, sem piscar nem reconectar.
+   * imagem mudar, sem piscar nem reconectar. As conexões diretas não precisam
+   * saber de nada: os quadros novos saem do mesmo encoder para os mesmos
+   * canais, venham da fonte que vierem.
    */
   async function changeScreen() {
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
@@ -1164,9 +1194,6 @@ export function createBroadcaster({
     const novoAudio = prepararSom(track, fresh);
     if (novoAudio && audioEncoder) pumpAudio(novoAudio);
 
-    await trocarNosPeers(track);
-    if (novoAudio) await trocarNosPeers(novoAudio);
-
     return fresh;
   }
 
@@ -1192,11 +1219,6 @@ export function createBroadcaster({
       ?.getVideoTracks()[0]
       ?.applyConstraints({ frameRate: { ideal: fps, max: fps } })
       .catch(() => {});
-
-    // O mesmo teto vale para as conexões diretas: sem ele o WebRTC parte de um
-    // chute conservador e leva dezenas de segundos subindo até a qualidade
-    // pedida — que é justamente o que a pessoa acabou de escolher.
-    for (const pc of peers.values()) ajustarEnvio(pc, { bitrate, fonte, fps });
   }
 
   const getSettings = () => ({ bitrate, fps });

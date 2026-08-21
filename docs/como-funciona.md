@@ -137,26 +137,29 @@ com quem transmite.
 A diferença que importa não é o número de saltos — é o transporte. O WebSocket
 anda sobre TCP, e TCP não sabe descartar um quadro atrasado: quando a rede
 aperta, ele entrega tudo, em ordem, mais tarde. A imagem não fica pior, ela
-fica no passado, e o que se vê é a transmissão andando aos saltos. O WebRTC
-anda sobre SRTP/UDP: abaixa o bitrate sozinho quando detecta perda, repõe
-pacote perdido com NACK e, no limite, deixa o quadro velho para trás. Ele
-degrada a qualidade em vez de degradar o tempo.
+fica no passado, e o que se vê é a transmissão andando aos saltos. O canal do
+WebRTC anda sobre UDP/SCTP e, marcado como não-confiável, deixa o quadro velho
+para trás em vez de atrasar tudo. E o que viaja por ele é exatamente o que o
+WebCodecs já produziu para o relay: sem fila de jitter de mídia, sem
+recodificação, sem um segundo pipeline de vídeo para dar manutenção.
 
 Como funciona a troca:
 
 1. Alguém pede `watch`. O relay começa a entregar na hora, como sempre fez, e
    o servidor manda um `rtc-want` ao transmissor com o nome daquele espectador.
-2. O transmissor abre um `RTCPeerConnection`, pendura as faixas do stream que
-   já está capturando e manda a oferta. Quem tem a mídia é quem oferece.
+2. O transmissor abre um `RTCPeerConnection`, cria nele um canal de dados
+   não-confiável e manda a oferta. O canal nasce antes da oferta porque é ele
+   que cria a seção de aplicação no SDP — uma negociação única basta.
 3. Offer, answer e candidatos ICE viajam como envelopes opacos pelo mesmo
    socket do relay — ele já existe e já está autenticado.
-4. Quando o primeiro quadro **aparece de fato** no `<video>` do espectador — e
-   não quando a conexão diz "connected" —, ele avisa `rtc-ativo`. Só então o
-   servidor para de mandar os bytes daquela tela para ele.
+4. Quando o canal abre, o espectador pede um keyframe pela mesma sinalização.
+   O primeiro quadro completo que chegar por lá é que vira a imagem — e não o
+   estado "connected" da conexão, que não garante nada. Só então ele avisa
+   `rtc-ativo`, e o servidor para de mandar os bytes daquela tela para ele.
 5. Se todo mundo que assiste chegou nesse ponto, o servidor manda `chunks:
-false` e o transmissor para de codificar para o relay: aqueles quadros não
-   teriam para onde ir, e a subida dele agora é disputada pelas conexões
-   diretas.
+   false` e o transmissor para de subir quadros pelo relay. Continua
+   codificando: os canais diretos bebem dessa mesma saída — o que se economiza
+   é a subida, não a produção.
 
 E quando não fecha — NAT simétrico sem TURN, sandbox que bloqueia, rede
 corporativa — nada acontece. Passados 8 segundos sem quadro, ou na primeira
@@ -183,13 +186,15 @@ banda, e por isso é escolha de quem hospeda, não padrão.
 - **Backpressure no relay.** Se o socket de alguém acumula mais de 2 MB, o
   servidor descarta quadros para essa pessoa em vez de enfileirar. Sem isso, um
   espectador com internet ruim derruba o processo por consumo de memória.
-- **A troca de transporte é decidida pelo primeiro quadro, não pelo
+- **Canal direto não-confiável, com backpressure própria.** Fora de ordem e sem
+  retransmissão: quadro atrasado não vale a espera que um transporte confiável
+  impõe. E quando o `bufferedAmount` do canal passa de 1 MB, o quadro é
+  descartado em vez de enfileirado — quem perde o fio recupera no keyframe
+  periódico, que sai a cada 3 segundos.
+- **A troca de transporte é decidida pelo primeiro keyframe, não pelo
   `connectionState`.** Um peer "connected" que não entrega nada é
   indistinguível de um travamento — e desligar o relay confiando nele deixaria
   a tela preta com a conexão reportando sucesso.
-- **`degradationPreference`.** Tela usa `maintain-resolution`: texto ilegível é
-  pior que texto a 10 quadros. Câmera usa `maintain-framerate`, porque ninguém
-  lê um rosto e movimento picado incomoda mais que imagem macia.
 - **`/.proxy/`** em todo fetch e WebSocket feito de dentro da atividade — é
   assim que o Discord roteia para o seu servidor.
 - **Client ID vem do servidor, não do build.** Embutir no bundle obrigava a

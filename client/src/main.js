@@ -77,9 +77,6 @@ function aplicarVolume(slot) {
   const s = streams.get(slot);
   if (!s) return;
   s.audio?.setVolume(volumeEfetivo(s.userId));
-  // Pela conexão direta o som sai do próprio <video>, e não do decodificador
-  // de áudio — o mesmo controle precisa alcançar os dois.
-  if (s.video) s.video.volume = Math.min(1, volumeEfetivo(s.userId));
 }
 // Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
 // 100%, ignorando o ajuste que a pessoa tinha feito.
@@ -168,16 +165,8 @@ function entradasDoGrid() {
   return saida;
 }
 
-/**
- * O nó que mostra esta transmissão agora: canvas do relay ou vídeo da conexão
- * direta. Só um dos dois está no DOM por vez, e trocar de um para o outro é o
- * que a mudança de transporte faz de visível.
- */
-const noDe = (s) => (s.viaRtc ? s.video : s.canvas);
-
-/** Resolução nativa, venha de onde vier. Zero enquanto nada foi desenhado. */
+/** Resolução nativa. Zero enquanto nada foi desenhado no canvas. */
 function medidaDe(s) {
-  if (s.viaRtc) return { w: s.video.videoWidth, h: s.video.videoHeight };
   return { w: s.canvas.width, h: s.canvas.height };
 }
 
@@ -501,7 +490,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   };
 
   if (stream) {
-    tile.append(noDe(stream));
+    tile.append(stream.canvas);
     tile.title = palco
       ? telaCheia
         ? 'Clique para sair da tela cheia'
@@ -910,25 +899,17 @@ function openStream(slot, userId) {
 
   const canvas = document.createElement('canvas');
 
-  // O elemento de vídeo da conexão direta. Nasce junto e fica fora do DOM até
-  // ela fechar; criá-lo só na hora custaria um quadro preto no meio da troca.
-  const video = document.createElement('video');
-  video.autoplay = true;
-  video.playsInline = true;
-  // A política de autoplay recusa vídeo com som antes de qualquer gesto. Entrar
-  // mudo e abrir o som quando ele chega é o que evita o play() rejeitado —
-  // aplicarVolume, logo abaixo, é quem devolve o volume de verdade.
-  video.muted = true;
-
   const s = {
     userId,
     canvas,
-    video,
     // Conexão direta com quem transmite, quando existir. Null é o normal: ela
     // pode nunca fechar, e nesse caso tudo continua pelo relay.
     pc: null,
+    // O canal de dados por onde os quadros chegam quando ela fechar.
+    canal: null,
+    canalAberto: false,
     // Verdadeiro quando os quadros já estão chegando por ela. É esta bandeira,
-    // e não o estado do RTCPeerConnection, que decide o que vai para a tela.
+    // e não o estado do RTCPeerConnection, que decide de onde vem a imagem.
     viaRtc: false,
     prazoRtc: null,
     // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
@@ -941,7 +922,9 @@ function openStream(slot, userId) {
         renderGrid();
       },
     }),
-    // Só nasce quando a transmissão anuncia que tem som — nem toda tem.
+    // Só nasce quando a transmissão anuncia que tem som — nem toda tem. Os dois
+    // transportes carregam os mesmos pacotes Opus, então este decoder serve
+    // para os dois e nunca precisa parar na troca entre eles.
     audio: null,
   };
 
@@ -965,9 +948,9 @@ function startAudio(slot, config) {
 function startStream(slot, config) {
   const s = streams.get(slot);
   if (!s) return;
-  // A conexão direta está entregando: montar o decodificador do relay agora
-  // gastaria memória de GPU para desenhar num canvas que ninguém está vendo.
-  if (s.viaRtc) return;
+  // Vale para os dois transportes: o canal direto carrega os mesmos quadros do
+  // relay, então o decoder é um só — e reconfigurá-lo aqui é o que faz uma
+  // mudança de resolução valer também para quem já está na conexão direta.
   if (!s.player.start(config)) return;
   renderGrid();
   renderBar();
@@ -981,7 +964,6 @@ function closeStream(slot) {
   s.audio?.stop();
   fecharPeer(s);
   s.canvas.remove();
-  s.video.remove();
   streams.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
@@ -1014,12 +996,12 @@ function closeAllStreams() {
 // -------------------------------------------------------------- WebRTC
 
 /**
- * A oferta chegou: monta a resposta e espera os quadros.
+ * A oferta chegou: monta a resposta e espera o canal abrir.
  *
- * Quem assiste nunca oferece, só responde — a mídia está do outro lado, e é
- * quem tem a mídia que sabe descrevê-la. Enquanto esta negociação acontece, o
- * relay segue entregando normalmente: a troca só acontece no primeiro quadro
- * que chegar de fato pela conexão direta, e não um instante antes.
+ * Quem assiste nunca oferece, só responde — o canal de dados nasce do outro
+ * lado, e é quem o cria que descreve a conexão. Enquanto esta negociação
+ * acontece, o relay segue entregando normalmente: a troca só acontece no
+ * primeiro keyframe que chegar pelo canal, e não um instante antes.
  */
 async function receberOferta(slot, sdp) {
   const s = streams.get(slot);
@@ -1040,24 +1022,16 @@ async function receberOferta(slot, sdp) {
       onEstado: (estado) => {
         if (MORTO.has(estado)) desistirDoRtc(slot);
       },
-      onTrack: (e) => {
-        const [remoto] = e.streams;
-        if (!remoto || s.video.srcObject === remoto) return;
-        s.video.srcObject = remoto;
-        s.video.play().catch(() => {});
-      },
     });
     s.pc = pc;
+
+    // O transmissor cria o canal; aqui ele só chega quando a negociação fecha.
+    pc.addEventListener('datachannel', (e) => ligarCanal(slot, s, e.channel));
 
     await pc.setRemoteDescription(sdp);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     enviarRtc(slot, { kind: 'answer', sdp: pc.localDescription });
-
-    // O sinal de que deu certo é quadro na tela, não estado de conexão: um peer
-    // "connected" que não entrega nada é indistinguível de um travamento, e é
-    // exatamente o que este caminho existe para evitar.
-    s.video.addEventListener('loadeddata', () => assumirRtc(slot), { once: true });
 
     clearTimeout(s.prazoRtc);
     s.prazoRtc = setTimeout(() => {
@@ -1067,6 +1041,61 @@ async function receberOferta(slot, sdp) {
     console.warn('[rtc] resposta falhou:', err.message);
     desistirDoRtc(slot);
   }
+}
+
+/**
+ * Liga o canal de dados deste slot.
+ *
+ * O sinal de que a conexão direta serve não é "connected": é o canal aberto
+ * pedindo um ponto de partida e recebendo um keyframe de verdade. Um peer
+ * conectado que não entrega nada é indistinguível de um travamento — e é
+ * exatamente isso que este caminho existe para evitar.
+ */
+function ligarCanal(slot, s, canal) {
+  canal.binaryType = 'arraybuffer';
+  s.canal = canal;
+
+  canal.addEventListener('open', () => {
+    s.canalAberto = true;
+    // O decoder deste lado está frio: sem pedir o ponto de partida, o primeiro
+    // keyframe chegaria só no periódico, segundos depois.
+    enviarRtc(slot, { kind: 'need-keyframe' });
+  });
+
+  canal.addEventListener('message', (e) => aoReceberCanal(slot, s, e.data));
+
+  const caiu = () => {
+    s.canalAberto = false;
+    // Caiu no meio da direção: volta ao relay. Se ainda nem assumiu, o prazo
+    // de conexão cuida de desistir sozinho.
+    if (s.viaRtc) desistirDoRtc(slot);
+  };
+  canal.addEventListener('close', caiu);
+  canal.addEventListener('error', caiu);
+}
+
+/**
+ * Roteia um pacote que chegou pelo canal direto — mesmo formato do relay.
+ *
+ * O som entra no decoder assim que o canal abre, mesmo antes do vídeo: pacote
+ * Opus se decodifica sozinho, e alimentá-lo cedo é o que evita um estalo na
+ * troca. O vídeo só assume com keyframe em mãos — cortar o relay num delta
+ * deixaria o decoder frio esperando o periódico com a tela congelada.
+ */
+function aoReceberCanal(slot, s, dados) {
+  if (!(dados instanceof ArrayBuffer)) return;
+  const tipo = new DataView(dados).getUint8(1);
+
+  if (tipo === 3) {
+    s.audio?.push(dados);
+    return;
+  }
+
+  if (!s.viaRtc) {
+    if (tipo !== 1) return;
+    assumirRtc(slot);
+  }
+  s.player.push(dados);
 }
 
 async function receberIce(slot, candidate) {
@@ -1080,7 +1109,7 @@ async function receberIce(slot, candidate) {
   }
 }
 
-/** A conexão direta entregou o primeiro quadro: ela assume, e o relay sai. */
+/** O canal direto entregou o primeiro keyframe: ele assume, e o relay sai. */
 function assumirRtc(slot) {
   const s = streams.get(slot);
   if (!s || s.viaRtc) return;
@@ -1088,18 +1117,11 @@ function assumirRtc(slot) {
   s.viaRtc = true;
   clearTimeout(s.prazoRtc);
   s.prazoRtc = null;
-
-  // O som passa a sair do <video>; manter o decodificador de áudio tocando
-  // junto daria eco com meio segundo de diferença entre os dois caminhos.
-  s.audio?.stop();
-  s.audio = null;
-  s.video.muted = false;
-  // Tirar do mudo pode fazer a política de autoplay pausar o vídeo; pedir o
-  // play de volta é barato e é o que evita a tela congelar no primeiro quadro.
-  s.video.play().catch(() => {});
   s.started = true;
 
-  aplicarVolume(slot);
+  // O decoder de áudio continua o mesmo: os dois caminhos carregam os mesmos
+  // pacotes Opus, e pará-lo aqui só criaria um buraco audível na troca.
+
   ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: true }));
   renderGrid();
   renderBar();
@@ -1136,8 +1158,8 @@ function fecharPeer(s) {
   clearTimeout(s.prazoRtc);
   s.prazoRtc = null;
   s.viaRtc = false;
-  s.video.srcObject = null;
-  s.video.muted = true;
+  s.canalAberto = false;
+  s.canal = null;
   if (!s.pc) return;
   try {
     s.pc.close();
@@ -1152,63 +1174,35 @@ function enviarRtc(slot, payload) {
   ws.send(JSON.stringify({ type: 'rtc', slot, payload }));
 }
 
-/**
- * Quadros por segundo do elemento de vídeo desde a última leitura.
- *
- * `getVideoPlaybackQuality` é o único jeito de contar quadros de um <video> sem
- * pendurar um callback por quadro — que custaria mais do que o diagnóstico vale.
- */
-function quadrosDoVideo(s) {
-  const q = s.video.getVideoPlaybackQuality?.();
-  if (!q) return '—';
-  const total = q.totalVideoFrames;
-  const n = total - (s.quadrosAntes ?? total);
-  s.quadrosAntes = total;
-  // Quadro descartado pelo navegador é exatamente a micro-travada que se vê.
-  const perdidos = q.droppedVideoFrames - (s.perdidosAntes ?? q.droppedVideoFrames);
-  s.perdidosAntes = q.droppedVideoFrames;
-  return perdidos > 0 ? `${n} fps · ${perdidos} perdidos` : `${n} fps`;
-}
-
 function ensureStatsTimer() {
   if (lagTimer) return;
   lagTimer = setInterval(() => {
     const s = streams.get(activeSlot) ?? streams.values().next().value;
     if (!s) return;
 
-    // Pela conexão direta quem conta os quadros é o próprio elemento de vídeo,
-    // e o atraso vem do ida-e-volta medido pelo ICE. O carimbo de tempo do
-    // relay não existe nesse caminho — e o do player ficaria congelado na
-    // última medição, o que é pior que não mostrar nada.
+    // Os dois transportes desembocam no mesmo decoder e no mesmo canvas, então
+    // quadros, resolução e jitter vêm do player nos dois. O que muda é o rótulo
+    // e o atraso: pela direta quem mede o caminho é o ICE — o carimbo de tempo
+    // do relay não existe nesse percurso.
+    $('pVia').textContent = s.viaRtc ? 'WebRTC (direto)' : s.pc ? 'relay (negociando direto…)' : 'relay (WebSocket)';
     if (s.viaRtc) {
-      const m = medidaDe(s);
-      $('pVia').textContent = 'WebRTC (direto)';
-      $('pRes').textContent = m.w ? `${m.w}×${m.h}` : '—';
-      $('pFps').textContent = quadrosDoVideo(s);
-      $('pJitter').textContent = 'do WebRTC';
       resumoPeer(s.pc).then(({ rtt, relay }) => {
-        if (!s.viaRtc) return;
+        if (!s.viaRtc || streams.get(activeSlot) !== s) return;
         $('pLag').textContent = rtt === null ? '—' : `${rtt} ms${relay ? ' · TURN' : ''}`;
       });
     } else {
-      $('pVia').textContent = s.pc ? 'relay (negociando direto…)' : 'relay (WebSocket)';
       $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
-      $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
-      $('pRes').textContent = s.player.getSizes().video;
-      // O número que interessa quando a imagem anda aos saltos sem perder um
-      // quadro sequer: o desencontro entre o ritmo em que os quadros foram
-      // capturados e o ritmo em que eles chegaram.
-      const j = s.player.getJitter();
-      $('pJitter').textContent = j === null ? '—' : `${j} ms`;
     }
+    $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
+    $('pRes').textContent = s.player.getSizes().video;
+    // O número que interessa quando a imagem anda aos saltos sem perder um
+    // quadro sequer: o desencontro entre o ritmo em que os quadros foram
+    // capturados e o ritmo em que eles chegaram.
+    const j = s.player.getJitter();
+    $('pJitter').textContent = j === null ? '—' : `${j} ms`;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
-    if (s.viaRtc) {
-      const temSom = (s.video.srcObject?.getAudioTracks?.().length ?? 0) > 0;
-      if (!temSom) $('pSom').textContent = 'a transmissão não tem áudio';
-      else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
-      else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
-    } else if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
+    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
     else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
     else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
     else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
@@ -1875,8 +1869,17 @@ function connect() {
       const view = new DataView(e.data);
       const s = streams.get(view.getUint8(0));
       if (!s) return;
-      if (view.getUint8(1) === 3) s.audio?.push(e.data);
-      else s.player.push(e.data);
+      // A direta já assumiu este slot: o servidor foi avisado e só não sabe
+      // ainda. O que continua chegando aqui está em trânsito — reproduzi-lo
+      // seria voltar no tempo.
+      if (s.viaRtc) return;
+      if (view.getUint8(1) === 3) {
+        // Canal direto aberto: o som já chega por lá. Tocar também este seria
+        // ouvir a mesma voz duas vezes, meio segundo defasadas.
+        if (!s.canalAberto) s.audio?.push(e.data);
+        return;
+      }
+      s.player.push(e.data);
       return;
     }
 

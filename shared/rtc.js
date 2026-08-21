@@ -1,13 +1,15 @@
 /**
- * Camada WebRTC: o vídeo sai do transmissor direto para quem assiste.
+ * Camada WebRTC: os quadros saem do transmissor direto para quem assiste.
  *
  * O relay por WebSocket continua existindo e continua sendo o caminho padrão —
  * este módulo é o atalho. A diferença que importa não é "P2P é mais curto": é
  * que o WebSocket anda sobre TCP, e TCP não tem como descartar um quadro
  * atrasado. Quando a rede aperta, o socket enfileira; a imagem não fica pior,
  * ela fica no passado, e o que se vê é a transmissão andando aos saltos. O
- * WebRTC roda sobre SRTP/UDP, abaixa o bitrate sozinho quando detecta perda e
- * repõe pacote perdido com NACK — degrada a qualidade em vez do tempo.
+ * WebRTC anda sobre UDP/SCTP e, com o canal de dados marcado como não-confiável,
+ * deixa o quadro velho para trás em vez de atrasar tudo — degrada o tempo menos,
+ * e sem fila de jitter nem recodificação, porque o que viaja é exatamente o que
+ * o WebCodecs já produziu para o relay.
  *
  * Nada aqui é obrigatório. Se a negociação não fechar (NAT simétrico sem TURN,
  * sandbox que bloqueia, rede corporativa), quem assiste simplesmente continua
@@ -56,7 +58,7 @@ export function suportaWebRTC() {
  * Cria a conexão e liga os avisos. Quem chama decide o que fazer com eles —
  * este módulo não conhece nem sala, nem slot, nem sinalização.
  */
-export function criarPeer({ ice, onIce, onEstado, onTrack }) {
+export function criarPeer({ ice, onIce, onEstado }) {
   const pc = new RTCPeerConnection({
     iceServers: ice ?? ICE_PADRAO,
     // Junta áudio e vídeo num transporte só. Sem isso são duas negociações de
@@ -78,45 +80,7 @@ export function criarPeer({ ice, onIce, onEstado, onTrack }) {
     if (pc.iceConnectionState === 'failed') onEstado?.('failed');
   });
 
-  if (onTrack) pc.addEventListener('track', (e) => onTrack(e));
-
   return pc;
-}
-
-/**
- * Ajusta como o encoder do WebRTC deve ceder quando a banda não dá.
- *
- * `maintain-resolution` para tela porque texto ilegível é pior que texto que
- * anda a 10 quadros — reduzir a resolução de um terminal apaga a informação.
- * Câmera é o oposto: ninguém lê um rosto, e movimento picado incomoda mais que
- * a imagem mais macia, então lá vale manter o framerate.
- *
- * O teto de bitrate é o mesmo que a pessoa escolheu para o relay: sem ele o
- * WebRTC parte de um chute conservador e leva dezenas de segundos subindo.
- */
-export async function ajustarEnvio(pc, { bitrate, fonte = 'tela', fps } = {}) {
-  for (const sender of pc.getSenders()) {
-    if (!sender.track) continue;
-    const params = sender.getParameters();
-    params.encodings ??= [{}];
-    if (!params.encodings.length) params.encodings.push({});
-
-    if (sender.track.kind === 'video') {
-      params.degradationPreference =
-        fonte === 'camera' ? 'maintain-framerate' : 'maintain-resolution';
-      for (const enc of params.encodings) {
-        if (bitrate) enc.maxBitrate = bitrate;
-        if (fps) enc.maxFramerate = fps;
-      }
-    }
-
-    try {
-      await sender.setParameters(params);
-    } catch {
-      // Navegador que não aceita o ajuste transmite com o padrão dele. É pior,
-      // não é quebrado — e não há nada a fazer além de seguir.
-    }
-  }
 }
 
 /**
