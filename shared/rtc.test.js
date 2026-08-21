@@ -8,14 +8,13 @@
  * decide quando a resposta não vem.
  *
  * O que se prova aqui é sobretudo a rede de segurança: candidato nulo que não
- * pode ser repassado, ICE que falha sem emitir mudança de estado, navegador
- * que recusa o ajuste de bitrate, `getStats` que lança. Nenhuma dessas
- * situações quebra a transmissão hoje — e é justamente por isso que uma
- * regressão nelas passaria despercebida.
+ * pode ser repassado, ICE que falha sem emitir mudança de estado, `getStats`
+ * que lança. Nenhuma dessas situações quebra a transmissão hoje — e é justamente
+ * por isso que uma regressão nelas passaria despercebida.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ajustarEnvio, criarPeer, MORTO, PRAZO_CONEXAO_MS, resumoPeer } from './rtc.js';
+import { criarPeer, MORTO, PRAZO_CONEXAO_MS, resumoPeer } from './rtc.js';
 
 const STUN = 'stun:stun.l.google.com:19302';
 
@@ -24,7 +23,6 @@ class PeerFalso {
   constructor(config) {
     this.config = config;
     this.ouvintes = new Map();
-    this.senders = [];
     this.estatisticas = new Map();
     PeerFalso.criados.push(this);
   }
@@ -34,30 +32,11 @@ class PeerFalso {
   disparar(nome, evento) {
     this.ouvintes.get(nome)?.(evento);
   }
-  getSenders() {
-    return this.senders;
-  }
   async getStats() {
     return this.estatisticas;
   }
 }
 PeerFalso.criados = [];
-
-/** Um sender no formato que `ajustarEnvio` espera. */
-function sender(kind, { encodings, recusa = false } = {}) {
-  return {
-    track: kind ? { kind } : null,
-    parametros: { encodings },
-    aplicados: [],
-    getParameters() {
-      return this.parametros;
-    },
-    async setParameters(p) {
-      if (recusa) throw new Error('nao suportado');
-      this.aplicados.push(p);
-    },
-  };
-}
 
 beforeEach(() => {
   PeerFalso.criados = [];
@@ -196,94 +175,10 @@ describe('criarPeer', () => {
     expect(onEstado).not.toHaveBeenCalled();
   });
 
-  it('só escuta faixas quando alguém quer recebê-las', async () => {
-    expect(criarPeer({ ice: [] }).ouvintes.has('track')).toBe(false);
-    expect(criarPeer({ ice: [], onTrack: vi.fn() }).ouvintes.has('track')).toBe(true);
-  });
-
   it('reconhece os estados dos quais não se volta', async () => {
     expect([...MORTO]).toEqual(expect.arrayContaining(['failed', 'closed', 'disconnected']));
     expect(MORTO.has('connected')).toBe(false);
     expect(PRAZO_CONEXAO_MS).toBeGreaterThan(0);
-  });
-});
-
-describe('ajustarEnvio', () => {
-  it('põe teto de bitrate e de taxa na faixa de vídeo', async () => {
-    // Sem o teto o WebRTC parte de um chute conservador e leva dezenas de
-    // segundos subindo até a qualidade que a pessoa já escolheu.
-    const video = sender('video', { encodings: [{}] });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [video];
-
-    await ajustarEnvio(pc, { bitrate: 2_500_000, fps: 30 });
-
-    expect(video.aplicados[0].encodings[0]).toMatchObject({
-      maxBitrate: 2_500_000,
-      maxFramerate: 30,
-    });
-  });
-
-  it('mantém a resolução na tela, porque texto ilegível é pior que texto lento', async () => {
-    const video = sender('video', { encodings: [{}] });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [video];
-
-    await ajustarEnvio(pc, { bitrate: 1, fonte: 'tela' });
-
-    expect(video.aplicados[0].degradationPreference).toBe('maintain-resolution');
-  });
-
-  it('mantém a taxa na câmera, porque ninguém lê um rosto', async () => {
-    const video = sender('video', { encodings: [{}] });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [video];
-
-    await ajustarEnvio(pc, { bitrate: 1, fonte: 'camera' });
-
-    expect(video.aplicados[0].degradationPreference).toBe('maintain-framerate');
-  });
-
-  it('cria a lista de encodings quando o navegador não trouxe nenhuma', async () => {
-    const semLista = sender('video', { encodings: undefined });
-    const vazia = sender('video', { encodings: [] });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [semLista, vazia];
-
-    await ajustarEnvio(pc, { bitrate: 900 });
-
-    expect(semLista.aplicados[0].encodings[0].maxBitrate).toBe(900);
-    expect(vazia.aplicados[0].encodings[0].maxBitrate).toBe(900);
-  });
-
-  it('não mexe no teto da faixa de som', async () => {
-    const audio = sender('audio', { encodings: [{}] });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [audio];
-
-    await ajustarEnvio(pc, { bitrate: 2_500_000 });
-
-    expect(audio.aplicados[0].encodings[0]).not.toHaveProperty('maxBitrate');
-    expect(audio.aplicados[0]).not.toHaveProperty('degradationPreference');
-  });
-
-  it('ignora o sender sem faixa', async () => {
-    const orfao = sender(null);
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [orfao];
-
-    await ajustarEnvio(pc, { bitrate: 1 });
-
-    expect(orfao.aplicados).toHaveLength(0);
-  });
-
-  it('segue transmitindo quando o navegador recusa o ajuste', async () => {
-    // Transmitir com o padrão do navegador é pior; não é quebrado.
-    const teimoso = sender('video', { encodings: [{}], recusa: true });
-    const pc = criarPeer({ ice: [] });
-    pc.senders = [teimoso];
-
-    await expect(ajustarEnvio(pc, { bitrate: 1 })).resolves.toBeUndefined();
   });
 });
 

@@ -146,6 +146,7 @@ let processadores = new Map();
 let capturas = [];
 let capturasPreparadas = [];
 let peers = [];
+let canais = [];
 
 class VideoEncoderFalso {
   constructor({ output, error }) {
@@ -234,7 +235,7 @@ SocketFalso.OPEN = 1;
 /**
  * RTCPeerConnection de mentira.
  *
- * O broadcaster nao negocia nada sozinho — ele pendura as faixas, pede a
+ * O broadcaster nao negocia nada sozinho — ele cria o canal de dados, pede a
  * oferta e repassa o que chega. E esse encadeamento que este duble permite
  * observar, sem precisar de dois navegadores conversando de verdade.
  */
@@ -242,10 +243,9 @@ class PeerFalso {
   constructor(config) {
     this.config = config;
     this.ouvintes = new Map();
-    this.faixas = [];
+    this.canais = [];
     this.remotas = [];
     this.candidatos = [];
-    this.senders = [];
     this.fechado = false;
     this.localDescription = null;
     peers.push(this);
@@ -256,20 +256,10 @@ class PeerFalso {
   disparar(nome, evento) {
     this.ouvintes.get(nome)?.(evento);
   }
-  addTrack(track, stream) {
-    this.faixas.push({ track, stream });
-    const sender = {
-      track,
-      getParameters: () => ({ encodings: [{}] }),
-      setParameters: async () => {},
-      substituidas: [],
-      replaceTrack: async (nova) => sender.substituidas.push(nova),
-    };
-    this.senders.push(sender);
-    return sender;
-  }
-  getSenders() {
-    return this.senders;
+  createDataChannel(rotulo, opcoes) {
+    const canal = new CanalFalso(rotulo, opcoes);
+    this.canais.push(canal);
+    return canal;
   }
   async createOffer() {
     return { type: 'offer', sdp: 'v=0 oferta' };
@@ -285,6 +275,25 @@ class PeerFalso {
   }
   close() {
     this.fechado = true;
+  }
+}
+
+/** Um RTCDataChannel de mentira: nasce conectando, e o teste decide quando abre. */
+class CanalFalso {
+  constructor(rotulo, opcoes) {
+    this.rotulo = rotulo;
+    this.opcoes = opcoes;
+    this.readyState = 'connecting';
+    this.bufferedAmount = 0;
+    this.binaryType = '';
+    this.enviados = [];
+    canais.push(this);
+  }
+  send(dado) {
+    this.enviados.push(dado);
+  }
+  abrir() {
+    this.readyState = 'open';
   }
 }
 
@@ -399,6 +408,7 @@ beforeEach(() => {
   capturas = [];
   capturasPreparadas = [];
   peers = [];
+  canais = [];
   VideoEncoderFalso.isConfigSupported.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -978,15 +988,26 @@ describe('conexão direta', () => {
     });
   }
 
-  it('abre um peer e oferece quando o servidor apresenta um espectador', async () => {
-    // Quem tem a midia e quem oferece: uma oferta feita por quem so recebe
-    // teria que descrever faixas que ela nao tem.
+  /** Apresenta um espectador ao transmissor e abre o canal dele. */
+  async function comPeer(ws, peerId = 'p1') {
+    ws.receber({ type: 'rtc-want', peer: peerId });
+    await respirar(8);
+    const canal = canais.at(-1);
+    canal.abrir();
+    return canal;
+  }
+
+  it('abre um peer com canal de dados e oferece quando o servidor apresenta um espectador', async () => {
+    // O canal nasce antes da oferta: é ele que cria a seção de aplicação no
+    // SDP, e uma negociação única basta.
     const { ws } = await noAr();
     ws.receber({ type: 'rtc-want', peer: 'p1' });
     await respirar(8);
 
     expect(peers).toHaveLength(1);
-    expect(peers[0].faixas).toHaveLength(1);
+    expect(peers[0].canais).toHaveLength(1);
+    expect(peers[0].canais[0].opcoes).toEqual({ ordered: false, maxRetransmits: 0 });
+    expect(peers[0].canais[0].binaryType).toBe('arraybuffer');
     expect(ws.mensagens()).toContainEqual({
       type: 'rtc',
       peer: 'p1',
@@ -1093,7 +1114,7 @@ describe('conexão direta', () => {
     expect(peers[0].fechado).toBe(true);
   });
 
-  it('para de subir quadros quando ninguém mais depende do relay', async () => {
+  it('para de subir quadros quando ninguém mais consome o relay e não há canal aberto', async () => {
     const contexto = await noAr();
     await umQuadro(contexto);
     anunciarConfig(contexto);
@@ -1122,19 +1143,116 @@ describe('conexão direta', () => {
     expect(contexto.encoder.codificados.length).toBeGreaterThan(parado);
   });
 
-  it('troca a faixa dos peers sem renegociar quando a tela muda', async () => {
-    // replaceTrack nao mexe no SDP: quem assiste segue na mesma conexao e so
-    // ve a imagem mudar. Renegociar custaria um ICE novo por espectador.
+  it('continua a codificar com a subida pausada enquanto houver canal aberto', async () => {
+    // Os canais diretos bebem da mesma saída do encoder: "chunks off" desliga
+    // a subida pelo relay, nunca a produção que os alimenta.
+    const contexto = await noAr();
+    await umQuadro(contexto);
+    anunciarConfig(contexto);
+    const canal = await comPeer(contexto.ws);
+
+    contexto.ws.receber({ type: 'chunks', on: false });
+    const antes = contexto.encoder.codificados.length;
+    const subidos = contexto.ws.binarios().length;
+
+    // O quadro é codificado — a produção continua...
+    await umQuadro(contexto);
+    expect(contexto.encoder.codificados.length).toBeGreaterThan(antes);
+
+    // ...e a saída segue para o canal, não para o relay.
+    contexto.encoder.output(chunkFalso(), {});
+    expect(contexto.ws.binarios()).toHaveLength(subidos);
+    expect(canal.enviados.length).toBeGreaterThan(0);
+  });
+
+  it('espelha os mesmos pacotes do relay para os canais diretos abertos', async () => {
+    const { ws, encoder } = await noAr();
+    ws.receber({ type: 'slot', slot: 2 });
+    const canal = await comPeer(ws);
+
+    encoder.output(chunkFalso({ type: 'key', timestamp: 4242 }), {});
+
+    expect(canal.enviados).toHaveLength(1);
+    const view = new DataView(canal.enviados[0]);
+    expect(view.getUint8(0)).toBe(2);
+    expect(view.getUint8(1)).toBe(1);
+    expect(view.getFloat64(2)).toBe(4242);
+    // O mesmo buffer que foi para o relay, sem transformação nenhuma.
+    expect(canal.enviados[0]).toEqual(ws.binarios().at(-1));
+  });
+
+  it('não espelha para canal que ainda não abriu', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+    const canal = canais.at(-1);
+
+    encoders.at(-1).output(chunkFalso(), {});
+
+    expect(canal.enviados).toHaveLength(0);
+  });
+
+  it('descarta em vez de enfileirar quando o canal está entupido', async () => {
+    // Enfileirar seria reconstruir, dentro do SCTP, o comportamento de TCP que
+    // este transporte existe para evitar. Quem perde o fio recupera no
+    // keyframe periódico.
+    const { ws, encoder } = await noAr();
+    const canal = await comPeer(ws);
+    canal.bufferedAmount = 1024 * 1024 + 1;
+
+    encoder.output(chunkFalso(), {});
+
+    expect(canal.enviados).toHaveLength(0);
+  });
+
+  it('atende ao pedido de keyframe que chega pelo envelope rtc', async () => {
+    // O decoder do espectador quebrou ou chegou frio depois do canal aberto:
+    // ele pede pelo próprio canal de sinalização, e o próximo quadro sai cheio.
+    const { ws, encoder, stream } = await noAr();
+    await comPeer(ws);
+
+    processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+    await respirar();
+    processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+    await respirar();
+    expect(encoder.codificados.at(-1).opcoes).toEqual({ keyFrame: false });
+
+    ws.receber({ type: 'rtc', peer: 'p1', payload: { kind: 'need-keyframe' } });
+    processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+    await respirar();
+
+    expect(encoder.codificados.at(-1).opcoes).toEqual({ keyFrame: true });
+  });
+
+  it('espelha também o som para os canais abertos', async () => {
+    const stream = new StreamFalsa(
+      new FaixaFalsa('video', { width: 1280, height: 720, displaySurface: 'browser' }),
+      new FaixaFalsa('audio', { sampleRate: 48_000, channelCount: 2 }),
+    );
+    const { ws } = await noAr({ audio: true }, stream);
+    await respirar();
+    const canal = await comPeer(ws);
+
+    audioEncoders.at(-1).output(chunkFalso());
+
+    expect(new DataView(canal.enviados.at(-1)).getUint8(1)).toBe(3);
+  });
+
+  it('muda a tela sem renegociar nada com as conexões diretas', async () => {
+    // Os quadros novos saem do mesmo encoder para os mesmos canais: trocar de
+    // fonte não é assunto da conexão — nem de faixa, nem de SDP.
     const { b, ws } = await noAr();
     ws.receber({ type: 'rtc-want', peer: 'p1' });
     await respirar(8);
+    const sinalizacoes = ws.mensagens().filter((m) => m.type === 'rtc').length;
 
     prepararCaptura(telaSimples());
     await b.changeScreen();
     await respirar(4);
 
-    expect(peers[0].senders[0].substituidas).toHaveLength(1);
     expect(peers[0].fechado).toBe(false);
+    expect(peers[0].canais).toHaveLength(1);
+    expect(ws.mensagens().filter((m) => m.type === 'rtc')).toHaveLength(sinalizacoes);
   });
 });
 
