@@ -57,12 +57,12 @@ export function verifyToken(token) {
   const [body, sig] = token.split('.');
   if (!body || !sig) return null;
 
-  const expected = hmac(body);
-  // Comparação em tempo constante — evita vazar o segredo por timing.
-  if (
-    sig.length !== expected.length ||
-    !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
-  ) {
+  const recebida = Buffer.from(sig);
+  const esperada = Buffer.from(hmac(body));
+  // Comparação em tempo constante — evita vazar o segredo por timing. O tamanho
+  // conferido é o dos bytes: um caractere não-ASCII deixa o texto do mesmo
+  // tamanho e o buffer maior, e aí o timingSafeEqual lançaria.
+  if (recebida.length !== esperada.length || !crypto.timingSafeEqual(recebida, esperada)) {
     return null;
   }
 

@@ -1047,6 +1047,10 @@ function handleBroadcaster(ws, room, info, fonte) {
     R.detachBroadcaster(room, ws);
     console.log(`[room ${room.id}] broadcaster saiu: ${info.name}`);
   });
+  // Um quadro inválido (UTF-8 quebrado, acima do maxPayload) chega como
+  // 'error' no socket. Sem ouvinte, o EventEmitter lança e o processo cai,
+  // levando todas as salas junto. O ws fecha o socket em seguida.
+  ws.on('error', () => R.detachBroadcaster(room, ws));
 }
 
 function handleViewer(ws, room, auth) {

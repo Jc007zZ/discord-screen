@@ -455,6 +455,22 @@ describe('/api/rooms/join', () => {
     expect(await resposta.json()).toMatchObject({ reason: 'senha' });
   });
 
+  it('recusa com 403 uma senha que não é texto, sem erro interno', async () => {
+    const { sala } = await salaCom('certa', 'entrar-5b');
+    const visita = await identidade({ instance_id: 'entrar-5b', name: 'Visita' });
+
+    for (const password of [123, { a: 1 }, ['certa'], true]) {
+      const resposta = await post('/api/rooms/join', {
+        identity: visita.identity,
+        roomId: sala.roomId,
+        password,
+      });
+
+      expect(resposta.status).toBe(403);
+      expect(await resposta.json()).toMatchObject({ reason: 'senha' });
+    }
+  });
+
   it('responde 429 depois de tentativas demais', async () => {
     const { sala } = await salaCom('certa', 'entrar-6');
     const visita = await identidade({ instance_id: 'entrar-6', name: 'Visita' });

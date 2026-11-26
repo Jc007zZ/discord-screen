@@ -224,7 +224,11 @@ export function checkPassword(room, password) {
   const locked = lockoutRemaining(room);
   if (locked !== null) return { ok: false, reason: 'bloqueado', seconds: locked };
 
-  if (passwordMatches(room, password ?? '')) {
+  // O corpo vem de JSON, então nem sempre é texto. Um número ou objeto chegava
+  // ao scrypt e virava erro 500; tratado como tentativa errada, conta para o
+  // bloqueio como qualquer outra.
+  const texto = typeof password === 'string' || password == null;
+  if (!room.password || (texto && passwordMatches(room, password ?? ''))) {
     room.attempts = [];
     return { ok: true };
   }
