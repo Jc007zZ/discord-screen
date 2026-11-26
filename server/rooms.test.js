@@ -250,6 +250,22 @@ describe('checkPassword', () => {
     expect(R.checkPassword(comSenha(), 'errada')).toEqual({ ok: false, reason: 'senha' });
   });
 
+  it.each([123, { a: 1 }, ['certa'], true])(
+    'conta uma senha que não é texto (%j) como tentativa errada, sem lançar',
+    (password) => {
+      const room = comSenha();
+
+      expect(R.checkPassword(room, password)).toEqual({ ok: false, reason: 'senha' });
+      expect(room.attempts).toHaveLength(1);
+    },
+  );
+
+  it('uma sala sem senha continua aberta para qualquer valor', () => {
+    const { room } = R.createRoom({ instance: instancia(), ownerId: 'u1', ownerName: 'A' });
+
+    expect(R.checkPassword(room, 123)).toEqual({ ok: true });
+  });
+
   it('tranca na quinta tentativa e diz por quantos segundos', () => {
     const room = comSenha();
     for (let i = 0; i < 4; i++) R.checkPassword(room, 'errada');

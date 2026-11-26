@@ -231,6 +231,23 @@ describe('transmissor', () => {
     expect(await ate(espectador, doTipo('config'), 'a config seguinte')).toBeTruthy();
   });
 
+  it('um quadro de protocolo inválido derruba só o socket dele, não o servidor', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    transmissor.on('error', () => {});
+    const caiu = fechou(transmissor);
+
+    // Quadro de texto com UTF-8 inválido: o ws emite 'error' no socket, e sem
+    // ninguém ouvindo esse evento o processo inteiro caía.
+    transmissor._socket.write(Buffer.from([0x81, 0x82, 0, 0, 0, 0, 0xff, 0xfe]));
+    await caiu;
+
+    await vi.waitFor(() => expect(room.broadcasters.size).toBe(0));
+    const espectador = await conectar(tokenDe(room.id, 'viewer'));
+    expect(await ate(espectador, doTipo('state'), 'o estado da sala')).toBeTruthy();
+  });
+
   it('a saída libera o slot e atualiza a sala', async () => {
     const { room, transmissor, espectador } = await noAr();
 

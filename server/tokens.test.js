@@ -88,6 +88,17 @@ describe('verifyToken recusa', () => {
     expect(verifyToken(`${corpo}.curta`)).toBeNull();
   });
 
+  it('uma assinatura com caractere não-ASCII do mesmo tamanho, sem lançar', async () => {
+    const [corpo, assinatura] = signToken({ uid: 'alice' }).split('.');
+    // Mesmo número de caracteres, mas "é" ocupa dois bytes: a conferência de
+    // tamanho passava e o timingSafeEqual lançava, derrubando o processo
+    // quando vinha pelo upgrade do WebSocket.
+    const adulterada = `${corpo}.é${assinatura.slice(1)}`;
+
+    expect(adulterada.split('.')[1]).toHaveLength(assinatura.length);
+    expect(verifyToken(adulterada)).toBeNull();
+  });
+
   it('um token assinado com outro segredo', async () => {
     const outro = await carregar({ SESSION_SECRET: 'outro-segredo-completamente-diferente' });
     const alheio = outro.signToken({ uid: 'alice' });
